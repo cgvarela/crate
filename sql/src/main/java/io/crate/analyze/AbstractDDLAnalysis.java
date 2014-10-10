@@ -33,7 +33,6 @@ public abstract class AbstractDDLAnalysis extends Analysis {
         super(parameterContext);
     }
 
-    @Override
     public void table(TableIdent tableIdent) {
         if (!isValidTableName(tableIdent.name())) {
             throw new InvalidTableNameException(tableIdent.name());
@@ -51,11 +50,6 @@ public abstract class AbstractDDLAnalysis extends Analysis {
         return analysisVisitor.visitDDLAnalysis(this, context);
     }
 
-    @Override
-    public boolean isData() {
-        return false;
-    }
-
     public boolean isValidTableName(String name) {
         for (String illegalCharacter: Constants.INVALID_TABLE_NAME_CHARACTERS) {
             if (name.contains(illegalCharacter)) {
@@ -63,5 +57,10 @@ public abstract class AbstractDDLAnalysis extends Analysis {
             }
         }
         return true;
+    }
+
+    @Override
+    public boolean isData() {
+        return false;
     }
 }

@@ -137,7 +137,7 @@ public class AnalysisTest {
                 functions,
                 new Analyzer.ParameterContext(new Object[0], new Object[0][]),
                 resolver);
-        analysis.table(TEST_TABLE_IDENT);
+        //analysis.table(TEST_TABLE_IDENT);
         return analysis;
     }
 

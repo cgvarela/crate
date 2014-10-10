@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.  You may
  * obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -19,40 +19,26 @@
  * software solely pursuant to the terms of the relevant commercial agreement.
  */
 
-package io.crate.analyze;
+package io.crate.metadata.relation;
 
-import com.google.common.collect.ImmutableList;
+import io.crate.analyze.where.WhereClause;
+import io.crate.metadata.table.TableInfo;
 
-import java.util.List;
+public class PartitionedTableRelation extends TableRelation {
 
-public abstract class Analysis {
-
-    private final Analyzer.ParameterContext parameterContext;
-
-    protected Analysis(Analyzer.ParameterContext parameterContext) {
-        this.parameterContext = parameterContext;
+    public PartitionedTableRelation(TableInfo tableInfo) {
+        super(tableInfo);
     }
 
-    public abstract boolean hasNoResult();
-
-    public abstract void normalize();
-
-    public Analyzer.ParameterContext parameterContext() {
-        return parameterContext;
+    @Override
+    public boolean hasNoResult() {
+        return super.hasNoResult() || (tableInfo.isPartitioned() && tableInfo.partitions().isEmpty());
     }
 
-    public Object[] parameters() {
-        return parameterContext.parameters();
-    }
-
-    public abstract boolean isData();
-
-    // TODO: should be moved to a more specific interface ?
-    public List<String> outputNames() {
-        return ImmutableList.of();
-    }
-
-    public <C, R> R accept(AnalysisVisitor<C,R> analysisVisitor, C context) {
-        return analysisVisitor.visitAnalysis(this, context);
+    @Override
+    public void whereClause(WhereClause whereClause) {
+        super.whereClause(whereClause);
+        //TODO: this.whereClause = partitionResolver.resolvePartitions(this.whereClause, tableInfo);
     }
 }
+

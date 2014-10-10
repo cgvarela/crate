@@ -22,16 +22,10 @@ package io.crate.analyze;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
-import com.google.common.collect.ImmutableList;
-import io.crate.analyze.where.PartitionResolver;
 import io.crate.analyze.where.WhereClause;
 import io.crate.exceptions.ColumnValidationException;
-import io.crate.exceptions.SchemaUnknownException;
-import io.crate.exceptions.TableUnknownException;
 import io.crate.exceptions.UnsupportedFeatureException;
 import io.crate.metadata.*;
-import io.crate.metadata.relation.TableRelation;
-import io.crate.metadata.table.SchemaInfo;
 import io.crate.metadata.table.TableInfo;
 import io.crate.operation.Input;
 import io.crate.planner.RowGranularity;
@@ -40,10 +34,12 @@ import io.crate.types.ArrayType;
 import io.crate.types.DataType;
 import io.crate.types.DataTypes;
 import io.crate.types.ObjectType;
-import org.apache.lucene.util.BytesRef;
 
 import javax.annotation.Nullable;
-import java.util.*;
+import java.util.Collection;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 
 /**
@@ -60,20 +56,12 @@ public abstract class AbstractDataAnalysis extends Analysis {
         }
     };
 
-    protected final EvaluatingNormalizer normalizer;
+    private final AllocationContext allocationContext;
 
+    protected final EvaluatingNormalizer normalizer;
     protected final ReferenceInfos referenceInfos;
     protected final Functions functions;
     protected final ReferenceResolver referenceResolver;
-    private final PartitionResolver partitionResolver;
-    protected TableInfo table;
-    protected final List<String> ids = new ArrayList<>();
-    protected final List<String> routingValues = new ArrayList<>();
-
-
-    private final AllocationContext allocationContext;
-
-    protected List<Symbol> outputSymbols = ImmutableList.of();
 
     private WhereClause whereClause = WhereClause.MATCH_ALL;
     protected RowGranularity rowGranularity;
@@ -87,7 +75,6 @@ public abstract class AbstractDataAnalysis extends Analysis {
                                 Analyzer.ParameterContext parameterContext,
                                 ReferenceResolver referenceResolver) {
         super(parameterContext);
-        this.partitionResolver = new PartitionResolver(referenceResolver, functions);
         this.allocationContext = new AllocationContext(referenceInfos);
         this.referenceInfos = referenceInfos;
         this.functions = functions;
@@ -99,63 +86,19 @@ public abstract class AbstractDataAnalysis extends Analysis {
         return allocationContext;
     }
 
-    @Deprecated
-    @Override
-    public void table(TableIdent tableIdent) {
-        SchemaInfo schemaInfo = referenceInfos.getSchemaInfo(tableIdent.schema());
-        if (schemaInfo == null) {
-            throw new SchemaUnknownException(tableIdent.schema());
-        }
-        TableInfo tableInfo = referenceInfos.getTableInfo(tableIdent);
-        if (tableInfo == null) {
-            throw new TableUnknownException(tableIdent.name());
-        }
-        // if we have a system schema, queries require scalar functions, since those are not using lucene
-        onlyScalarsAllowed = schemaInfo.systemSchema();
-        sysExpressionsAllowed = schemaInfo.systemSchema();
-        table = tableInfo;
-        updateRowGranularity(table.rowGranularity());
-    }
-
-    @Deprecated
-    public void editableTable(TableIdent tableIdent) throws TableUnknownException,
-                                                            UnsupportedOperationException {
-        SchemaInfo schemaInfo = referenceInfos.getSchemaInfo(tableIdent.schema());
-        if (schemaInfo == null) {
-            throw new SchemaUnknownException(tableIdent.schema());
-        } else if (schemaInfo.systemSchema()) {
-            throw new UnsupportedOperationException(
-                    String.format("tables of schema '%s' are read only.", tableIdent.schema()));
-        }
-        TableInfo tableInfo = schemaInfo.getTableInfo(tableIdent.name());
-        if (tableInfo == null) {
-            throw new TableUnknownException(tableIdent.name());
-        } else if (tableInfo.isAlias() && !tableInfo.isPartitioned()) {
-            throw new UnsupportedOperationException(
-                    String.format("aliases are read only cannot modify \"%s\"", tableIdent.name()));
-        }
-        table = tableInfo;
-        allocationContext().currentRelation = new TableRelation(table, partitionResolver);
-        updateRowGranularity(table.rowGranularity());
-    }
-
-    @Deprecated
-    @Override
-    public TableInfo table() {
-        return this.table;
-    }
+    public abstract TableInfo getTableInfo(TableIdent tableIdent);
 
     /**
      * return true if the given {@linkplain com.google.common.base.Predicate}
      * returns true for a parent column of this one.
      * returns false if info has no parent column.
      */
-    @Deprecated
-    protected boolean hasMatchingParent(ReferenceInfo info,
-                              Predicate<ReferenceInfo> parentMatchPredicate) {
+    public static boolean hasMatchingParent(TableInfo tableInfo,
+                                            ReferenceInfo info,
+                                            Predicate<ReferenceInfo> parentMatchPredicate) {
         ColumnIdent parent = info.ident().columnIdent().getParent();
         while (parent != null) {
-            ReferenceInfo parentInfo = table.getReferenceInfo(parent);
+            ReferenceInfo parentInfo = tableInfo.getReferenceInfo(parent);
             if (parentMatchPredicate.apply(parentInfo)) {
                 return true;
             }
@@ -172,14 +115,13 @@ public abstract class AbstractDataAnalysis extends Analysis {
         return allocationContext.allocatedFunctions.values();
     }
 
-    @Deprecated
     public Function allocateFunction(FunctionInfo info, List<Symbol> arguments) {
         Function function = new Function(info, arguments);
         Function existing = allocationContext.allocatedFunctions.get(function);
         if (existing != null) {
             return existing;
         } else {
-            if (info.type() == FunctionInfo.Type.AGGREGATE){
+            if (info.type() == FunctionInfo.Type.AGGREGATE) {
                 hasAggregates = true;
                 sysExpressionsAllowed = true;
             }
@@ -188,25 +130,11 @@ public abstract class AbstractDataAnalysis extends Analysis {
         return function;
     }
 
-    /**
-     * Indicates that the statement will not match, so that there is no need to execute it
-     */
-    @Deprecated
-    public boolean noMatch() {
-        return whereClause().noMatch();
-    }
-
-    public boolean hasNoResult() {
-        return false;
-    }
-
-    @Deprecated
     public WhereClause whereClause(WhereClause whereClause) {
         this.whereClause = whereClause;
         return this.whereClause;
     }
 
-    @Deprecated
     public WhereClause whereClause() {
         return whereClause;
     }
@@ -225,14 +153,6 @@ public abstract class AbstractDataAnalysis extends Analysis {
 
     public RowGranularity rowGranularity() {
         return rowGranularity;
-    }
-
-    public List<Symbol> outputSymbols() {
-        return outputSymbols;
-    }
-
-    public void outputSymbols(List<Symbol> symbols) {
-        this.outputSymbols = symbols;
     }
 
     /**
@@ -342,13 +262,9 @@ public abstract class AbstractDataAnalysis extends Analysis {
         return normalized;
     }
 
-
-    private Map<String, Object> normalizeObjectValue(Map<String, Object> value, ReferenceInfo info) {
-        return normalizeObjectValue(value, info, false);
-    }
-
     @SuppressWarnings("unchecked")
     private Map<String, Object> normalizeObjectValue(Map<String, Object> value, ReferenceInfo info, boolean forWrite) {
+        TableInfo table = referenceInfos.getTableInfoSafe(info.ident().tableIdent());
         for (Map.Entry<String, Object> entry : value.entrySet()) {
             ColumnIdent nestedIdent = ColumnIdent.getChild(info.ident().columnIdent(), entry.getKey());
             ReferenceInfo nestedInfo = table.getReferenceInfo(nestedIdent);
@@ -403,15 +319,11 @@ public abstract class AbstractDataAnalysis extends Analysis {
             return info.type().value(primitiveValue);
         } catch (Exception e) {
             throw new ColumnValidationException(info.ident().columnIdent().fqn(),
-                    String.format("Invalid %s",
-                            info.type().getName()
-                    )
-            );
+                    String.format("Invalid %s", info.type().getName()));
         }
     }
 
     public void normalize() {
-        normalizer.normalizeInplace(outputSymbols());
         if (whereClause().hasQuery()) {
             whereClause.normalize(normalizer);
             if (onlyScalarsAllowed && whereClause().hasQuery()){
@@ -426,51 +338,17 @@ public abstract class AbstractDataAnalysis extends Analysis {
         }
     }
 
-    /**
-     * Compute an id and adds it, also add routing value
-     */
-    @Deprecated
-    public void addIdAndRouting(List<BytesRef> primaryKeyValues, String clusteredByValue) {
-        addIdAndRouting(false, primaryKeyValues, clusteredByValue);
-    }
-
-    @Deprecated
-    protected void addIdAndRouting(Boolean create, List<BytesRef> primaryKeyValues, String clusteredByValue) {
-
-        ColumnIdent clusteredBy = table().clusteredBy();
-        Id id = new Id(table().primaryKey(), primaryKeyValues, clusteredBy == null ? null : clusteredBy, create);
-        if (id.isValid()) {
-            String idString = id.stringValue();
-            ids.add(idString);
-            if (clusteredByValue == null) {
-                clusteredByValue = idString;
-            }
-        }
-        if (clusteredByValue != null) {
-            routingValues.add(clusteredByValue);
-        }
-    }
-
-    @Deprecated
-    public List<String> ids() {
-        return ids;
-    }
-
-    @Deprecated
-    public List<String> routingValues() {
-        return routingValues;
-    }
-
     public boolean hasSysExpressions() {
         return allocationContext.hasSysExpressions;
     }
 
     @Override
-    public <C, R> R accept(AnalysisVisitor<C, R> analysisVisitor, C context) {
-        return analysisVisitor.visitDataAnalysis(this, context);
+    public boolean isData() {
+        return true;
     }
 
-    public PartitionResolver partitionResolver() {
-        return partitionResolver;
+    @Override
+    public <C, R> R accept(AnalysisVisitor<C, R> analysisVisitor, C context) {
+        return analysisVisitor.visitDataAnalysis(this, context);
     }
 }

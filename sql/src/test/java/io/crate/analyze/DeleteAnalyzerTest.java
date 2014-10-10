@@ -28,6 +28,7 @@ import io.crate.metadata.MetaDataModule;
 import io.crate.metadata.doc.DocSchemaInfo;
 import io.crate.metadata.relation.AliasedAnalyzedRelation;
 import io.crate.metadata.relation.AnalyzedRelation;
+import io.crate.metadata.relation.TableRelation;
 import io.crate.metadata.sys.MetaDataSysModule;
 import io.crate.metadata.table.SchemaInfo;
 import io.crate.operation.operator.EqOperator;
@@ -40,7 +41,9 @@ import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.inject.Module;
 import org.hamcrest.Matchers;
 import org.hamcrest.core.IsInstanceOf;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 
 import java.util.Arrays;
 import java.util.List;
@@ -55,6 +58,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 public class DeleteAnalyzerTest extends BaseAnalyzerTest {
+
+    @Rule
+    public ExpectedException expectedException = ExpectedException.none();
 
     static class TestMetaDataModule extends MetaDataModule {
         @Override
@@ -93,7 +99,8 @@ public class DeleteAnalyzerTest extends BaseAnalyzerTest {
     @Test
     public void testDeleteWhere() throws Exception {
         DeleteAnalysis.NestedDeleteAnalysis analysis = analyze("delete from users where name='Trillian'");
-        assertEquals(TEST_DOC_TABLE_IDENT, analysis.table().ident());
+        TableRelation relation = (TableRelation) analysis.relation();
+        assertEquals(TEST_DOC_TABLE_IDENT, relation.tableInfo().ident());
 
         assertThat(analysis.rowGranularity(), is(RowGranularity.DOC));
 
@@ -106,19 +113,22 @@ public class DeleteAnalyzerTest extends BaseAnalyzerTest {
         assertLiteralSymbol(whereClause.arguments().get(1), "Trillian");
     }
 
-    @Test( expected = UnsupportedOperationException.class)
+    @Test
     public void testDeleteSystemTable() throws Exception {
+        expectedException.expect(UnsupportedOperationException.class);
         analyze("delete from sys.nodes where name='Trillian'");
     }
 
-    @Test( expected = UnsupportedOperationException.class )
+    @Test
     public void testDeleteWhereSysColumn() throws Exception {
+        expectedException.expect(UnsupportedOperationException.class);
         analyze("delete from users where sys.nodes.id = 'node_1'");
     }
 
     @Test
     public void testDeleteWherePartitionedByColumn() throws Exception {
         DeleteAnalysis.NestedDeleteAnalysis analysis = analyze("delete from parted where date = 1395874800000");
+        AnalyzedRelation relation = analysis.relation();
         assertThat(analysis.whereClause().hasQuery(), Matchers.is(false));
         assertThat(analysis.whereClause().noMatch(), Matchers.is(false));
         assertEquals(ImmutableList.of(
@@ -126,6 +136,7 @@ public class DeleteAnalyzerTest extends BaseAnalyzerTest {
                 analysis.whereClause().partitions());
 
         analysis = analyze("delete from parted");
+        relation = analysis.relation();
         assertThat(analysis.whereClause().hasQuery(), Matchers.is(false));
         assertThat(analysis.whereClause().noMatch(), Matchers.is(false));
         assertEquals(ImmutableList.<String>of(), analysis.whereClause().partitions());
@@ -138,10 +149,10 @@ public class DeleteAnalyzerTest extends BaseAnalyzerTest {
         DeleteAnalysis.NestedDeleteAnalysis actualAnalysis = analyze(
                 "delete from users as u where u.name='Trillian'");
 
-        assertAliasedRelation(actualAnalysis.allocationContext().currentRelation, "u");
+        assertAliasedRelation(actualAnalysis.relation(), "u");
         assertEquals(
-                ((Function)expectedAnalysis.whereClause().query()).arguments().get(0),
-                ((Function)actualAnalysis.whereClause().query()).arguments().get(0)
+                ((Function) expectedAnalysis.whereClause().query()).arguments().get(0),
+                ((Function) actualAnalysis.whereClause().query()).arguments().get(0)
         );
     }
 
@@ -166,8 +177,10 @@ public class DeleteAnalyzerTest extends BaseAnalyzerTest {
         assertThat(analysis.nestedAnalysis().size(), is(4));
 
         DeleteAnalysis.NestedDeleteAnalysis firstAnalysis = analysis.nestedAnalysis().get(0);
-        assertThat(firstAnalysis.ids().get(0), is("1"));
+        TableRelation tableRelation = (TableRelation) firstAnalysis.relation();
+        assertThat(tableRelation.ids().get(0), is("1"));
         DeleteAnalysis.NestedDeleteAnalysis secondAnalysis = analysis.nestedAnalysis().get(1);
-        assertThat(secondAnalysis.ids().get(0), is("2"));
+        TableRelation secondTableRelation = (TableRelation) secondAnalysis.relation();
+        assertThat(secondTableRelation.ids().get(0), is("2"));
     }
 }

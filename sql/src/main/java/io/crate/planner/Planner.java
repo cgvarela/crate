@@ -114,6 +114,13 @@ public class Planner extends AnalysisVisitor<Planner.Context, Plan> {
         Plan plan = new Plan();
         plan.expectsAffectedRows(false);
 
+        if (analysis.querySpecification().children().size() > 1) {
+            throw new UnsupportedOperationException("Selecting from multiple tables is not supported");
+        }
+
+        TableRelation relation = tableRelationVisitor.process(analysis.querySpecification());
+        relation.whereClause(analysis.querySpecification().whereClause());
+
         if (analysis.querySpecification().hasGroupBy()) {
             groupBy(analysis, plan, context);
         } else if (analysis.hasAggregates()) {
@@ -185,12 +192,14 @@ public class Planner extends AnalysisVisitor<Planner.Context, Plan> {
         Plan plan = new Plan();
         for (UpdateAnalysis.NestedAnalysis nestedAnalysis : analysis.nestedAnalysis()) {
             if (!nestedAnalysis.hasNoResult()) {
+                TableRelation relation = tableRelationVisitor.process(nestedAnalysis.relation());
+
                 ESUpdateNode node = new ESUpdateNode(
-                        indices(nestedAnalysis),
+                        indices(relation),
                         nestedAnalysis.assignments(),
                         nestedAnalysis.whereClause(),
-                        nestedAnalysis.ids(),
-                        nestedAnalysis.routingValues()
+                        relation.ids(),
+                        relation.routingValues()
                 );
                 plan.add(node);
             }
@@ -202,12 +211,14 @@ public class Planner extends AnalysisVisitor<Planner.Context, Plan> {
     @Override
     protected Plan visitDeleteAnalysis(DeleteAnalysis analysis, Context context) {
         Plan plan = new Plan();
+
         for (DeleteAnalysis.NestedDeleteAnalysis nestedDeleteAnalysis : analysis.nestedAnalysis()) {
-            if (nestedDeleteAnalysis.ids().size() == 1 &&
-                    nestedDeleteAnalysis.routingValues().size() == 1) {
+            TableRelation relation = tableRelationVisitor.process(nestedDeleteAnalysis.relation());
+            if (relation.ids().size() == 1 &&
+                    relation.routingValues().size() == 1) {
                 ESDelete(nestedDeleteAnalysis, plan);
             } else {
-                ESDeleteByQuery(nestedDeleteAnalysis, plan);
+                ESDeleteByQuery(nestedDeleteAnalysis, relation, plan);
             }
         }
         return plan;
@@ -241,16 +252,16 @@ public class Planner extends AnalysisVisitor<Planner.Context, Plan> {
             projection.inputs(contextBuilder.outputs());
         } else {
             Reference sourceRef;
-            if (analysis.table().isPartitioned() && analysis.partitionIdent() == null) {
+            if (analysis.tableInfo().isPartitioned() && analysis.partitionIdent() == null) {
                 // table is partitioned, insert partitioned columns into the output
-                sourceRef = new Reference(analysis.table().getReferenceInfo(DocSysColumns.DOC));
+                sourceRef = new Reference(analysis.tableInfo().getReferenceInfo(DocSysColumns.DOC));
                 Map<ColumnIdent, Symbol> overwrites = new HashMap<>();
-                for (ReferenceInfo referenceInfo : analysis.table().partitionedByColumns()) {
+                for (ReferenceInfo referenceInfo : analysis.tableInfo().partitionedByColumns()) {
                     overwrites.put(referenceInfo.ident().columnIdent(), new Reference(referenceInfo));
                 }
                 projection.overwrites(overwrites);
             } else {
-                sourceRef = new Reference(analysis.table().getReferenceInfo(DocSysColumns.RAW));
+                sourceRef = new Reference(analysis.tableInfo().getReferenceInfo(DocSysColumns.RAW));
             }
             contextBuilder = contextBuilder.output(ImmutableList.<Symbol>of(sourceRef));
         }
@@ -281,8 +292,8 @@ public class Planner extends AnalysisVisitor<Planner.Context, Plan> {
          *    -> insert into es index (partition determined by partition by value)
          */
 
-        TableInfo table = analysis.table();
-        int clusteredByPrimaryKeyIdx = table.primaryKey().indexOf(analysis.table().clusteredBy());
+        TableInfo table = analysis.tableInfo();
+        int clusteredByPrimaryKeyIdx = table.primaryKey().indexOf(table.clusteredBy());
         List<String> partitionedByNames;
         List<ColumnIdent> partitionByColumns;
         String tableName;
@@ -449,29 +460,28 @@ public class Planner extends AnalysisVisitor<Planner.Context, Plan> {
     }
 
     private void ESDelete(DeleteAnalysis.NestedDeleteAnalysis analysis, Plan plan) {
-        WhereClause whereClause = analysis.whereClause();
-        if (analysis.ids().size() == 1 && analysis.routingValues().size() == 1) {
+        TableRelation relation = tableRelationVisitor.process(analysis.relation());
+        if (relation.ids().size() == 1 && relation.routingValues().size() == 1) {
             plan.add(new ESDeleteNode(
-                    indices(analysis)[0],
-                    analysis.ids().get(0),
-                    analysis.routingValues().get(0),
-                    whereClause.version()));
+                    indices(relation)[0],
+                    relation.ids().get(0),
+                    relation.routingValues().get(0),
+                    analysis.whereClause().version()));
             plan.expectsAffectedRows(true);
         } else {
             // TODO: implement bulk delete task / node
-            ESDeleteByQuery(analysis, plan);
+            ESDeleteByQuery(analysis, relation, plan);
         }
     }
 
-    private void ESDeleteByQuery(DeleteAnalysis.NestedDeleteAnalysis analysis, Plan plan) {
-        String[] indices = indices(analysis);
+    private void ESDeleteByQuery(DeleteAnalysis.NestedDeleteAnalysis analysis, TableRelation tableRelation, Plan plan) {
+        String[] indices = indices(tableRelation);
 
-        if (indices.length > 0 && !analysis.whereClause().noMatch()) {
-            if (!analysis.whereClause().hasQuery() && analysis.table().isPartitioned()) {
+        if (indices.length > 0 && !tableRelation.hasNoResult()) {
+            if (!analysis.whereClause().hasQuery() && tableRelation.tableInfo().isPartitioned()) {
                 for (String index : indices) {
                     plan.add(new ESDeleteIndexNode(index, true));
                 }
-
             } else {
                 // TODO: if we allow queries like 'partitionColumn=X or column=Y' which is currently
                 // forbidden through analysis, we must issue deleteByQuery request in addition
@@ -1207,27 +1217,8 @@ public class Planner extends AnalysisVisitor<Planner.Context, Plan> {
     /**
      * return the ES index names the query should go to
      */
-    private String[] indices(AbstractDataAnalysis analysis) {
-        TableInfo tableInfo = analysis.table();
-        String[] indices;
-
-        if (analysis.whereClause().noMatch()) {
-            indices = org.elasticsearch.common.Strings.EMPTY_ARRAY;
-        } else if (!tableInfo.isPartitioned()) {
-            // table name for non-partitioned tables
-            indices = new String[]{ tableInfo.ident().name() };
-        } else if (analysis.whereClause().partitions().size() == 0) {
-            // all partitions
-            indices = new String[tableInfo.partitions().size()];
-            for (int i = 0; i < tableInfo.partitions().size(); i++) {
-                indices[i] = tableInfo.partitions().get(i).stringValue();
-            }
-
-        } else {
-            indices = analysis.whereClause().partitions().toArray(
-                    new String[analysis.whereClause().partitions().size()]);
-        }
-        return indices;
+    private String[] indices(TableRelation tableRelation) {
+        return null;
     }
 
     private AggregationProjection localMergeProjection(AbstractDataAnalysis analysis) {
@@ -1265,7 +1256,10 @@ public class Planner extends AnalysisVisitor<Planner.Context, Plan> {
 
         @Override
         public TableRelation visitQuerySpecification(AnalyzedQuerySpecification relation, Void context) {
-            return process(relation.sourceRelation(), context);
+            if (relation.sourceRelations().size() > 1) {
+                throw new UnsupportedOperationException("Multiple tables not supported");
+            }
+            return process(relation.sourceRelations().get(0), context);
         }
 
         @Override

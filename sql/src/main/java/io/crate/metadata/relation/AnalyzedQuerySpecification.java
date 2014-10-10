@@ -28,10 +28,12 @@ import io.crate.analyze.EvaluatingNormalizer;
 import io.crate.analyze.where.WhereClause;
 import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.table.TableInfo;
+import io.crate.planner.symbol.Literal;
 import io.crate.planner.symbol.Reference;
 import io.crate.planner.symbol.Symbol;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -48,24 +50,27 @@ import java.util.List;
  */
 public class AnalyzedQuerySpecification implements AnalyzedRelation {
 
-    private final AnalyzedRelation sourceRelation;
+    private final List<AnalyzedRelation> sourceRelations;
+    private final WhereClause whereClause;
     private final List<Symbol> outputs;
     private final List<Symbol> groupBy;
     private final Optional<Symbol> having;
     private final List<Symbol> orderBy;
     private final Integer offset;
     private final Integer limit;
-    private ImmutableList<AnalyzedRelation> children;
+    private List<TableInfo> tables;
 
     public AnalyzedQuerySpecification(List<Symbol> outputs,
-                                      AnalyzedRelation sourceRelation,
+                                      List<AnalyzedRelation> sourceRelation,
+                                      WhereClause whereClause,
                                       @Nullable List<Symbol> groupBy,
                                       @Nullable Symbol having,
                                       @Nullable List<Symbol> orderBy,
                                       @Nullable Integer limit,
                                       @Nullable Integer offset) {
         this.outputs = outputs;
-        this.sourceRelation = sourceRelation;
+        this.sourceRelations = sourceRelation;
+        this.whereClause = whereClause;
         this.groupBy = Objects.firstNonNull(groupBy, ImmutableList.<Symbol>of());
         this.having = Optional.fromNullable(having);
         this.orderBy = Objects.firstNonNull(orderBy, ImmutableList.<Symbol>of());
@@ -77,17 +82,12 @@ public class AnalyzedQuerySpecification implements AnalyzedRelation {
         return outputs;
     }
 
-    public AnalyzedRelation sourceRelation() {
-        return sourceRelation;
-    }
-
     public WhereClause whereClause() {
-        return sourceRelation.whereClause();
+        return whereClause;
     }
 
-    @Override
-    public void whereClause(WhereClause whereClause) {
-        sourceRelation.whereClause(whereClause);
+    public List<AnalyzedRelation> sourceRelations() {
+        return sourceRelations;
     }
 
     @Override
@@ -95,7 +95,8 @@ public class AnalyzedQuerySpecification implements AnalyzedRelation {
                                   @Nullable String tableOrAlias,
                                   ColumnIdent columnIdent,
                                   boolean forWrite) {
-        return sourceRelation.getReference(schema, tableOrAlias, columnIdent, forWrite);
+        // won't be needed until sub-selects are supported
+        throw new UnsupportedOperationException("can't get reference from a QuerySpecification");
     }
 
     public List<Symbol> groupBy() {
@@ -114,6 +115,23 @@ public class AnalyzedQuerySpecification implements AnalyzedRelation {
         return orderBy;
     }
 
+    @Override
+    public boolean hasNoResult() {
+        Symbol havingClause = having.orNull();
+        if (havingClause != null && havingClause instanceof Literal) {
+            Literal havingLiteral = (Literal)havingClause;
+            if (havingLiteral.value() == false) {
+                return true;
+            }
+        }
+
+        boolean allNoResult = true;
+        for (AnalyzedRelation sourceRelation : sourceRelations) {
+            allNoResult = allNoResult && sourceRelation.hasNoResult();
+        }
+        return allNoResult || (limit != null && limit == 0);
+    }
+
     @Nullable
     public Integer limit() {
         return limit;
@@ -125,10 +143,7 @@ public class AnalyzedQuerySpecification implements AnalyzedRelation {
 
     @Override
     public List<AnalyzedRelation> children() {
-        if (children == null) {
-            children = ImmutableList.of(sourceRelation);
-        }
-        return children;
+        return sourceRelations;
     }
 
     @Override
@@ -138,7 +153,13 @@ public class AnalyzedQuerySpecification implements AnalyzedRelation {
 
     @Override
     public List<TableInfo> tables() {
-        return sourceRelation.tables();
+        if (tables == null) {
+            tables = new ArrayList<>();
+            for (AnalyzedRelation sourceRelation : sourceRelations) {
+                tables.addAll(sourceRelation.tables());
+            }
+        }
+        return tables;
     }
 
     @Override
@@ -147,18 +168,10 @@ public class AnalyzedQuerySpecification implements AnalyzedRelation {
     }
 
     @Override
-    public boolean addressedBy(String relationName) {
-        return sourceRelation.addressedBy(relationName);
-    }
-
-    @Override
-    public boolean addressedBy(@Nullable String schemaName, String tableName) {
-        return sourceRelation.addressedBy(schemaName, tableName);
-    }
-
-    @Override
     public void normalize(EvaluatingNormalizer normalizer) {
-        sourceRelation.normalize(normalizer);
+        for (AnalyzedRelation relation : sourceRelations) {
+            relation.normalize(normalizer);
+        }
         normalizer.normalizeInplace(outputs);
         normalizer.normalizeInplace(groupBy);
         normalizer.normalizeInplace(orderBy);

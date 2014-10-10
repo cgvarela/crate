@@ -27,6 +27,7 @@ import io.crate.metadata.Functions;
 import io.crate.metadata.ReferenceInfos;
 import io.crate.metadata.ReferenceResolver;
 import io.crate.metadata.TableIdent;
+import io.crate.metadata.relation.AnalyzedRelation;
 import io.crate.metadata.table.TableInfo;
 
 import javax.annotation.Nullable;
@@ -68,21 +69,20 @@ public class DeleteAnalysis extends Analysis {
     }
 
     @Override
-    public void table(TableIdent tableIdent) {
-    }
-
-    @Override
-    public TableInfo table() {
-        throw new UnsupportedOperationException("use nested analysis");
-    }
-
-    @Override
     public boolean hasNoResult() {
         return Iterables.all(nestedAnalysisList, HAS_NO_RESULT_PREDICATE);
     }
 
     @Override
     public void normalize() {
+        for (NestedDeleteAnalysis nestedDeleteAnalysis : nestedAnalysisList) {
+            nestedDeleteAnalysis.normalize();
+        }
+    }
+
+    @Override
+    public boolean isData() {
+        return true;
     }
 
     @Override
@@ -92,13 +92,43 @@ public class DeleteAnalysis extends Analysis {
 
     public static class NestedDeleteAnalysis extends AbstractDataAnalysis {
 
-        public NestedDeleteAnalysis(ReferenceInfos referenceInfos, Functions functions, Analyzer.ParameterContext parameterContext, ReferenceResolver referenceResolver) {
+        private AnalyzedRelation relation;
+        private TableInfo tableInfo;
+
+        public NestedDeleteAnalysis(ReferenceInfos referenceInfos,
+                                    Functions functions,
+                                    Analyzer.ParameterContext parameterContext,
+                                    ReferenceResolver referenceResolver) {
             super(referenceInfos, functions, parameterContext, referenceResolver);
         }
 
         @Override
+        public TableInfo getTableInfo(TableIdent tableIdent) {
+            tableInfo = referenceInfos.getEditableTableInfoSafe(tableIdent);
+            return tableInfo;
+        }
+
+        public void relation(AnalyzedRelation relation) {
+            this.relation = relation;
+        }
+
+        public AnalyzedRelation relation() {
+            return relation;
+        }
+
+        public TableInfo tableInfo() {
+            return tableInfo;
+        }
+
+        @Override
+        public void normalize() {
+            relation.normalize(normalizer);
+        }
+
+        @Override
         public boolean hasNoResult() {
-            return super.whereClause().noMatch();
+            // TODO;return relation.whereClause().noMatch();
+            return false;
         }
 
         @Override

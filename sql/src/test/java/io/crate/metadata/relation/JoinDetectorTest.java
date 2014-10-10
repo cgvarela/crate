@@ -24,7 +24,6 @@ package io.crate.metadata.relation;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import io.crate.analyze.where.PartitionResolver;
 import io.crate.analyze.where.WhereClause;
 import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.Routing;
@@ -46,7 +45,6 @@ import static io.crate.testing.TestingHelpers.*;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertThat;
-import static org.mockito.Mockito.mock;
 
 public class JoinDetectorTest {
 
@@ -56,11 +54,11 @@ public class JoinDetectorTest {
             .build());
 
     static final TableRelation A = new TableRelation(TestingTableInfo.builder(
-            new TableIdent(null, "a"), RowGranularity.DOC, shardRouting).build(), mock(PartitionResolver.class));
+            new TableIdent(null, "a"), RowGranularity.DOC, shardRouting).build());
     static final TableRelation B = new TableRelation(TestingTableInfo.builder(
-            new TableIdent(null, "b"), RowGranularity.DOC, shardRouting).build(), mock(PartitionResolver.class));
+            new TableIdent(null, "b"), RowGranularity.DOC, shardRouting).build());
     static final TableRelation C = new TableRelation(TestingTableInfo.builder(
-            new TableIdent(null, "c"), RowGranularity.DOC, shardRouting).build(), mock(PartitionResolver.class));
+            new TableIdent(null, "c"), RowGranularity.DOC, shardRouting).build());
 
     @Rule
     public ExpectedException expectedException = ExpectedException.none();

@@ -21,15 +21,16 @@
 
 package io.crate.analyze;
 
-import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.*;
-import io.crate.analyze.where.WhereClause;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import io.crate.exceptions.UnsupportedFeatureException;
 import io.crate.metadata.FunctionIdent;
 import io.crate.metadata.FunctionInfo;
 import io.crate.metadata.TableIdent;
 import io.crate.metadata.relation.AliasedAnalyzedRelation;
+import io.crate.metadata.relation.PartitionedTableRelation;
 import io.crate.metadata.relation.TableRelation;
 import io.crate.metadata.table.TableInfo;
 import io.crate.operation.aggregation.impl.CollectSetAggregation;
@@ -44,9 +45,7 @@ import io.crate.planner.DataTypeVisitor;
 import io.crate.planner.symbol.*;
 import io.crate.planner.symbol.Literal;
 import io.crate.sql.tree.*;
-import io.crate.sql.tree.Table;
 import io.crate.types.*;
-import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.index.query.MultiMatchQueryBuilder;
 
@@ -62,7 +61,6 @@ abstract class DataStatementAnalyzer<T extends AbstractDataAnalysis> extends Abs
             .put(ComparisonExpression.Type.LESS_THAN_OR_EQUAL, ComparisonExpression.Type.GREATER_THAN_OR_EQUAL)
             .build();
 
-    private static final PrimaryKeyVisitor primaryKeyVisitor = new PrimaryKeyVisitor();
     private final static String _SCORE = "_score";
     private final static DataTypeAnalyzer dataTypeAnalyzer = new DataTypeAnalyzer();
 
@@ -71,13 +69,18 @@ abstract class DataStatementAnalyzer<T extends AbstractDataAnalysis> extends Abs
 
     @Override
     protected Symbol visitTable(Table node, T context) {
-        TableIdent tableIdent = TableIdent.of(node);
-        TableInfo tableInfo = context.referenceInfos.getTableInfoSafe(tableIdent);
+        TableInfo tableInfo = context.getTableInfo(TableIdent.of(node));
         boolean systemSchema = tableInfo.schemaInfo().systemSchema();
         context.onlyScalarsAllowed = systemSchema;
         context.sysExpressionsAllowed = systemSchema;
-        TableRelation tableRelation = new TableRelation(tableInfo, context.partitionResolver());
-        context.allocationContext().currentRelation = tableRelation;
+
+        TableRelation tableRelation;
+        if (tableInfo.isPartitioned()) {
+            tableRelation = new PartitionedTableRelation(tableInfo);
+        } else {
+            tableRelation = new TableRelation(tableInfo);
+        }
+        context.allocationContext().setRelation(tableRelation);
         context.updateRowGranularity(tableInfo.rowGranularity());
         return new RelationSymbol(tableRelation);
     }
@@ -89,7 +92,8 @@ abstract class DataStatementAnalyzer<T extends AbstractDataAnalysis> extends Abs
 
         AliasedAnalyzedRelation aliasedAnalyzedRelation =
                 new AliasedAnalyzedRelation(node.getAlias(), ((RelationSymbol) symbol).relation());
-        context.allocationContext().currentRelation = aliasedAnalyzedRelation;
+
+        context.allocationContext().setRelation(aliasedAnalyzedRelation);
         return new RelationSymbol(aliasedAnalyzedRelation);
     }
 
@@ -402,7 +406,7 @@ abstract class DataStatementAnalyzer<T extends AbstractDataAnalysis> extends Abs
         String operatorName = node.inverse() ? AnyNotLikeOperator.NAME : AnyLikeOperator.NAME;
 
         FunctionIdent functionIdent = new FunctionIdent(
-                operatorName, Arrays.asList(leftType, ((Literal)right).valueType()));
+                operatorName, Arrays.asList(leftType, ((Literal) right).valueType()));
         FunctionInfo functionInfo = context.getFunctionInfo(functionIdent);
         return context.allocateFunction(functionInfo, Arrays.asList(left, right));
     }
@@ -486,88 +490,6 @@ abstract class DataStatementAnalyzer<T extends AbstractDataAnalysis> extends Abs
         // is just wrapped inside a negativeExpression
         // the visitor here swaps it to get -1 in a (symbol)LiteralInteger
         return negativeLiteralVisitor.process(process(node.getValue(), context), null);
-    }
-
-    @Deprecated
-    protected WhereClause generateWhereClause(Optional<Expression> whereExpression, T context) {
-        assert !(context instanceof SelectAnalysis) : "generateWhereClause may not be used for select statements anymore";
-        if (!whereExpression.isPresent()) {
-            return WhereClause.MATCH_ALL;
-        }
-        WhereClause whereClause = new WhereClause(
-                context.normalizer.normalize(process(whereExpression.get(), context)));
-        if (whereClause.hasQuery()){
-            if (!context.sysExpressionsAllowed && context.hasSysExpressions()) {
-                throw new UnsupportedOperationException("Filtering system columns is currently " +
-                        "only supported by queries using group-by or global aggregates.");
-            }
-
-            PrimaryKeyVisitor.Context pkc = primaryKeyVisitor.process(context.table(), whereClause.query());
-            if (pkc != null) {
-                whereClause.clusteredByLiteral(pkc.clusteredByLiteral());
-                if (pkc.noMatch) {
-                    whereClause = WhereClause.NO_MATCH;
-                } else {
-                    whereClause.version(pkc.version());
-
-                    if (pkc.keyLiterals() != null) {
-                        processPrimaryKeyLiterals(pkc.keyLiterals(), whereClause, context);
-                    }
-                }
-            }
-
-            // TODO: this should be part of the getRouting on tableInfo
-            if (context.table().isPartitioned()) {
-                whereClause = context.partitionResolver().resolvePartitions(whereClause, context.table());
-            }
-        }
-        return whereClause;
-    }
-
-    protected void processPrimaryKeyLiterals(List primaryKeyLiterals, WhereClause whereClause, T context) {
-        List<List<BytesRef>> primaryKeyValuesList = new ArrayList<>(primaryKeyLiterals.size());
-        primaryKeyValuesList.add(new ArrayList<BytesRef>(context.table().primaryKey().size()));
-
-        for (int i=0; i<primaryKeyLiterals.size(); i++) {
-            Object primaryKey = primaryKeyLiterals.get(i);
-            if (primaryKey instanceof Literal) {
-                Literal pkLiteral = (Literal)primaryKey;
-                // support e.g. pk IN (Value..,)
-                if (pkLiteral.valueType().id() == SetType.ID) {
-                    Set<Literal> literals = Sets.newHashSet(Literal.explodeCollection(pkLiteral));
-                    Iterator<Literal> literalIterator = literals.iterator();
-                    for (int s=0; s<literals.size(); s++) {
-                        Literal pk = literalIterator.next();
-                        if (s >= primaryKeyValuesList.size()) {
-                            // copy already parsed pk values, so we have all possible multiple pk for all sets
-                            primaryKeyValuesList.add(Lists.newArrayList(primaryKeyValuesList.get(s - 1)));
-                        }
-                        List<BytesRef> primaryKeyValues = primaryKeyValuesList.get(s);
-                        if (primaryKeyValues.size() > i) {
-                            primaryKeyValues.set(i, BytesRefValueSymbolVisitor.INSTANCE.process(pk));
-                        } else {
-                            primaryKeyValues.add(BytesRefValueSymbolVisitor.INSTANCE.process(pk));
-                        }
-                    }
-                } else {
-                    for (List<BytesRef> primaryKeyValues : primaryKeyValuesList) {
-                        primaryKeyValues.add((BytesRefValueSymbolVisitor.INSTANCE.process(pkLiteral)));
-                    }
-                }
-            } else if (primaryKey instanceof List) {
-                primaryKey = Lists.transform((List<Literal>) primaryKey, new com.google.common.base.Function<Literal, BytesRef>() {
-                    @Override
-                    public BytesRef apply(Literal input) {
-                        return BytesRefValueSymbolVisitor.INSTANCE.process(input);
-                    }
-                });
-                primaryKeyValuesList.add((List<BytesRef>) primaryKey);
-            }
-        }
-
-        for (List<BytesRef> primaryKeyValues : primaryKeyValuesList) {
-            context.addIdAndRouting(primaryKeyValues, whereClause.clusteredBy().orNull());
-        }
     }
 
     @Override

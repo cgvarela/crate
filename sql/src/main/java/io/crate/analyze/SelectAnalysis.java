@@ -29,10 +29,9 @@ import io.crate.exceptions.AmbiguousColumnAliasException;
 import io.crate.exceptions.UnsupportedFeatureException;
 import io.crate.metadata.*;
 import io.crate.metadata.relation.AnalyzedQuerySpecification;
+import io.crate.metadata.table.TableInfo;
 import io.crate.planner.symbol.Function;
-import io.crate.planner.symbol.Literal;
 import io.crate.planner.symbol.Symbol;
-import io.crate.planner.symbol.SymbolType;
 
 import javax.annotation.Nullable;
 import java.util.Collection;
@@ -45,14 +44,21 @@ public class SelectAnalysis extends AbstractDataAnalysis {
     private Boolean[] nullsFirst;
     private List<Symbol> sortSymbols;
     protected boolean selectFromFieldCache = false;
+    private List<String> outputNames;
 
     private AnalyzedQuerySpecification querySpecification;
 
     private Multimap<String, Symbol> aliasMap = ArrayListMultimap.create();
+    private List<Symbol> outputs;
 
     public SelectAnalysis(ReferenceInfos referenceInfos, Functions functions,
                           Analyzer.ParameterContext parameterContext, ReferenceResolver referenceResolver) {
         super(referenceInfos, functions, parameterContext, referenceResolver);
+    }
+
+    @Override
+    public TableInfo getTableInfo(TableIdent tableIdent) {
+        return referenceInfos.getTableInfoSafe(tableIdent);
     }
 
     public AnalyzedQuerySpecification querySpecification() {
@@ -61,6 +67,23 @@ public class SelectAnalysis extends AbstractDataAnalysis {
 
     public void querySpecification(AnalyzedQuerySpecification relation) {
         this.querySpecification = relation;
+    }
+
+    public void outputSymbols(List<Symbol> outputs) {
+        this.outputs = outputs;
+    }
+
+    public void outputNames(List<String> outputNames) {
+        this.outputNames = outputNames;
+    }
+
+    @Override
+    public List<String> outputNames() {
+        return outputNames;
+    }
+
+    public List<Symbol> outputSymbols() {
+        return outputs;
     }
 
     @Deprecated
@@ -109,19 +132,11 @@ public class SelectAnalysis extends AbstractDataAnalysis {
 
     @Override
     public boolean hasNoResult() {
-        Symbol havingClause = querySpecification.having().orNull();
-        if (havingClause != null && havingClause.symbolType() == SymbolType.LITERAL) {
-            Literal havingLiteral = (Literal)havingClause;
-            if (havingLiteral.value() == false) {
-                return true;
-            }
-        }
-
+        boolean hasNoResult = false;
         if (globalAggregate()) {
-            return Objects.firstNonNull(querySpecification.limit(), 1) < 1 || querySpecification.offset() > 0;
+            hasNoResult = Objects.firstNonNull(querySpecification.limit(), 1) < 1 || querySpecification.offset() > 0;
         }
-        Integer limit = querySpecification.limit();
-        return querySpecification.whereClause().noMatch() || (limit != null && limit == 0);
+        return hasNoResult || querySpecification.hasNoResult();
     }
 
     @Override
@@ -148,7 +163,7 @@ public class SelectAnalysis extends AbstractDataAnalysis {
     }
 
     public void addAlias(String alias, Symbol symbol) {
-        outputNames().add(alias);
+        outputNames.add(alias);
         aliasMap.put(alias, symbol);
     }
 

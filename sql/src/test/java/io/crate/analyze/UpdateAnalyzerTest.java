@@ -43,7 +43,6 @@ import io.crate.planner.symbol.*;
 import io.crate.sql.parser.SqlParser;
 import io.crate.types.ArrayType;
 import io.crate.types.DataTypes;
-import junit.framework.Assert;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.inject.Module;
 import org.junit.Rule;
@@ -180,7 +179,7 @@ public class UpdateAnalyzerTest extends BaseAnalyzerTest {
     public void testUpdateAssignments() throws Exception {
         UpdateAnalysis.NestedAnalysis analysis = analyze("update users set name='Trillian'");
         assertThat(analysis.assignments().size(), is(1));
-        assertThat(analysis.table().ident(), is(new TableIdent(null, "users")));
+        assertThat(analysis.tableInfo().ident(), is(new TableIdent(null, "users")));
 
         Reference ref = analysis.assignments().keySet().iterator().next();
         assertThat(ref.info().ident().tableIdent().name(), is("users"));
@@ -198,7 +197,7 @@ public class UpdateAnalyzerTest extends BaseAnalyzerTest {
 
         Reference ref = analysis.assignments().keySet().iterator().next();
         assertThat(ref, instanceOf(DynamicReference.class));
-        Assert.assertEquals(DataTypes.LONG, ref.info().type());
+        assertEquals(DataTypes.LONG, ref.info().type());
         assertThat(ref.info().ident().columnIdent().isColumn(), is(false));
         assertThat(ref.info().ident().columnIdent().fqn(), is("details.arms"));
     }
@@ -293,6 +292,7 @@ public class UpdateAnalyzerTest extends BaseAnalyzerTest {
     }
 
 
+    @Test
     public void testUpdateWithWrongParameters() throws Exception {
         expectedException.expect(ColumnValidationException.class);
         expectedException.expectMessage("Validation failed for name: cannot cast {} to string");
@@ -361,8 +361,8 @@ public class UpdateAnalyzerTest extends BaseAnalyzerTest {
         UpdateAnalysis.NestedAnalysis actualAnalysis = analyze(
                 "update users as u set u.awesome=true where u.awesome=false");
 
-        assertThat(actualAnalysis.allocationContext().currentRelation, instanceOf(AliasedAnalyzedRelation.class));
-        assertThat(((AliasedAnalyzedRelation) actualAnalysis.allocationContext().currentRelation).alias(), is("u"));
+        assertThat(actualAnalysis.relation(), instanceOf(AliasedAnalyzedRelation.class));
+        assertThat(((AliasedAnalyzedRelation) actualAnalysis.relation()).alias(), is("u"));
         assertEquals(
                 expectedAnalysis.assignments(),
                 actualAnalysis.assignments()

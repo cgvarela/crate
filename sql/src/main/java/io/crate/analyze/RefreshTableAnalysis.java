@@ -60,7 +60,6 @@ public class RefreshTableAnalysis extends AbstractDDLAnalysis {
         this.schemaInfo = schemaInfo;
     }
 
-    @Override
     public TableInfo table() {
         return tableInfo;
     }

@@ -79,7 +79,6 @@ public class AddColumnAnalysis extends AbstractDDLAnalysis {
         this.tableIdent = tableIdent;
     }
 
-    @Override
     public TableInfo table() {
         return this.tableInfo;
     }

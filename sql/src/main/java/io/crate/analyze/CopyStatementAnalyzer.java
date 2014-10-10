@@ -26,7 +26,8 @@ import io.crate.exceptions.UnsupportedFeatureException;
 import io.crate.metadata.Functions;
 import io.crate.metadata.ReferenceInfos;
 import io.crate.metadata.ReferenceResolver;
-import io.crate.metadata.TableIdent;
+import io.crate.metadata.relation.AnalyzedRelation;
+import io.crate.planner.symbol.RelationSymbol;
 import io.crate.planner.symbol.StringValueSymbolVisitor;
 import io.crate.planner.symbol.Symbol;
 import io.crate.sql.tree.*;
@@ -59,11 +60,13 @@ public class CopyStatementAnalyzer extends DataStatementAnalyzer<CopyAnalysis> {
             context.settings(settingsFromProperties(node.genericProperties().get(), context));
         }
         context.mode(CopyAnalysis.Mode.FROM);
-        process(node.table(), context);
+        AnalyzedRelation relation = ((RelationSymbol) process(node.table(), context)).relation();
+        assert relation.tables().size() == 1;
+        context.tableInfo(relation.tables().get(0));
 
         if (!node.table().partitionProperties().isEmpty()) {
             context.partitionIdent(PartitionPropertiesAnalyzer.toPartitionIdent(
-                            context.table(),
+                            context.tableInfo(),
                             node.table().partitionProperties(),
                             context.parameters()));
         }
@@ -79,15 +82,17 @@ public class CopyStatementAnalyzer extends DataStatementAnalyzer<CopyAnalysis> {
         if (node.genericProperties().isPresent()) {
             context.settings(settingsFromProperties(node.genericProperties().get(), context));
         }
-        process(node.table(), context);
+        AnalyzedRelation relation = ((RelationSymbol) process(node.table(), context)).relation();
+        assert relation.tables().size() == 1;
+        context.tableInfo(relation.tables().get(0));
 
         if (!node.table().partitionProperties().isEmpty()) {
             String partitionIdent = PartitionPropertiesAnalyzer.toPartitionIdent(
-                    context.table(),
+                    context.tableInfo(),
                     node.table().partitionProperties(),
                     context.parameters());
             if (!context.partitionExists(partitionIdent)){
-                throw new PartitionUnknownException(context.table().ident().fqn(), partitionIdent);
+                throw new PartitionUnknownException(context.tableInfo().ident().fqn(), partitionIdent);
             }
             context.partitionIdent(partitionIdent);
         }
@@ -129,11 +134,5 @@ public class CopyStatementAnalyzer extends DataStatementAnalyzer<CopyAnalysis> {
     @Override
     public Analysis newAnalysis(Analyzer.ParameterContext parameterContext) {
         return new CopyAnalysis(referenceInfos, functions, parameterContext, globalReferenceResolver);
-    }
-
-    @Override
-    protected Symbol visitTable(Table node, CopyAnalysis context) {
-        context.editableTable(TableIdent.of(node));
-        return null;
     }
 }

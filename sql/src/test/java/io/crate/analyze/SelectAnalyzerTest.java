@@ -27,6 +27,7 @@ import com.google.common.collect.Sets;
 import io.crate.PartitionName;
 import io.crate.analyze.where.WhereClause;
 import io.crate.exceptions.AmbiguousColumnAliasException;
+import io.crate.exceptions.AmbiguousColumnException;
 import io.crate.exceptions.SQLParseException;
 import io.crate.exceptions.UnsupportedFeatureException;
 import io.crate.metadata.FunctionInfo;
@@ -164,6 +165,13 @@ public class SelectAnalyzerTest extends BaseAnalyzerTest {
     @Test(expected = IllegalArgumentException.class)
     public void testGroupedSelectMissingOutput() throws Exception {
         analyze("select load['5'] from sys.nodes group by load['1']");
+    }
+
+    @Test
+    public void testAmbiguousColumn() throws Exception {
+        expectedException.expect(AmbiguousColumnException.class);
+        expectedException.expectMessage("Column \"name\" is ambiguous");
+        analyze("select name from users a, users b");
     }
 
     @Test
@@ -673,7 +681,7 @@ public class SelectAnalyzerTest extends BaseAnalyzerTest {
     @Test
     public void testRewriteCountStringLiteral() {
         SelectAnalysis analysis = analyze("select count('id') from sys.nodes");
-        List<Symbol> outputSymbols = analysis.outputSymbols;
+        List<Symbol> outputSymbols = analysis.outputSymbols();
         assertThat(outputSymbols.size(), is(1));
         assertThat(outputSymbols.get(0), instanceOf(Function.class));
         assertThat(((Function) outputSymbols.get(0)).arguments().size(), is(0));
@@ -682,7 +690,7 @@ public class SelectAnalyzerTest extends BaseAnalyzerTest {
     @Test
     public void testRewriteCountNull() {
         SelectAnalysis analysis = analyze("select count(null) from sys.nodes");
-        List<Symbol> outputSymbols = analysis.outputSymbols;
+        List<Symbol> outputSymbols = analysis.outputSymbols();
         assertThat(outputSymbols.size(), is(1));
         assertThat(outputSymbols.get(0), instanceOf(Literal.class));
         assertThat((Long) ((Literal) outputSymbols.get(0)).value(), is(0L));
@@ -857,7 +865,7 @@ public class SelectAnalyzerTest extends BaseAnalyzerTest {
         assertThat(function.arguments().get(1), IsInstanceOf.instanceOf(Literal.class));
         Literal expressionLiteral = (Literal) function.arguments().get(0);
         Literal patternLiteral = (Literal) function.arguments().get(1);
-        assertThat((BytesRef)expressionLiteral.value(), is(new BytesRef("1")));
+        assertThat((BytesRef) expressionLiteral.value(), is(new BytesRef("1")));
         assertThat((BytesRef) patternLiteral.value(), is(new BytesRef("2")));
     }
 
@@ -898,7 +906,7 @@ public class SelectAnalyzerTest extends BaseAnalyzerTest {
     @Test
     public void testNotPredicate() {
         SelectAnalysis analysis = analyze("select * from users where name not like 'foo%'");
-        assertThat(((Function)analysis.querySpecification().whereClause().query()).info().ident().name(), is(NotPredicate.NAME));
+        assertThat(((Function) analysis.querySpecification().whereClause().query()).info().ident().name(), is(NotPredicate.NAME));
     }
 
     @Test
@@ -1246,9 +1254,9 @@ public class SelectAnalyzerTest extends BaseAnalyzerTest {
         SelectAnalysis actualAnalysisOptionalAs =  analyze("select awesome a " +
                 "from users u where u.awesome = true");
 
-        assertIsAliasedRelation(actualAnalysis.querySpecification().sourceRelation(), "u");
-        assertIsAliasedRelation(actualAnalysisColAliased.querySpecification().sourceRelation(), "u");
-        assertIsAliasedRelation(actualAnalysisOptionalAs.querySpecification().sourceRelation(), "u");
+        assertIsAliasedRelation(actualAnalysis.querySpecification().sourceRelations().get(0), "u");
+        assertIsAliasedRelation(actualAnalysisColAliased.querySpecification().sourceRelations().get(0), "u");
+        assertIsAliasedRelation(actualAnalysisOptionalAs.querySpecification().sourceRelations().get(0), "u");
         assertEquals(
                 ((Function)expectedAnalysis.querySpecification().whereClause().query()).arguments().get(0),
                 ((Function)actualAnalysis.querySpecification().whereClause().query()).arguments().get(0)

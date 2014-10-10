@@ -63,7 +63,6 @@ public class DropTableAnalysis extends AbstractDDLAnalysis {
         this.tableInfo = tableInfo;
     }
 
-    @Override
     public TableInfo table() {
         return tableInfo;
     }

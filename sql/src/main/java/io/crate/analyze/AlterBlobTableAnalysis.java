@@ -58,7 +58,6 @@ public class AlterBlobTableAnalysis extends AbstractDDLAnalysis {
         }
     }
 
-    @Override
     public TableInfo table() {
         return tableInfo;
     }

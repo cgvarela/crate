@@ -21,12 +21,9 @@
 
 package io.crate.analyze;
 
-import io.crate.metadata.TableIdent;
-import io.crate.metadata.table.TableInfo;
 import org.elasticsearch.common.settings.Settings;
 
 import javax.annotation.Nullable;
-import java.util.Locale;
 import java.util.Set;
 
 public class SetAnalysis extends Analysis {
@@ -77,19 +74,6 @@ public class SetAnalysis extends Analysis {
     }
 
     @Override
-    public void table(TableIdent tableIdent) {
-        throw new UnsupportedOperationException(
-                String.format(Locale.ENGLISH, "table() not supported on %s", getClass().getSimpleName())
-        );
-    }
-
-    @Override
-    public TableInfo table() {
-        throw new UnsupportedOperationException(
-                String.format(Locale.ENGLISH, "table() not supported on %s", getClass().getSimpleName()));
-    }
-
-    @Override
     public boolean hasNoResult() {
         if (settings != null) {
             return settings.getAsMap().isEmpty();
@@ -103,6 +87,11 @@ public class SetAnalysis extends Analysis {
     @Override
     public void normalize() {
 
+    }
+
+    @Override
+    public boolean isData() {
+        return false;
     }
 
     @Override

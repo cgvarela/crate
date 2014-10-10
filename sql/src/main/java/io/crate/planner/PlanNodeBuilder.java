@@ -52,14 +52,13 @@ class PlanNodeBuilder {
         WhereClause whereClause;
         if (analysis instanceof SelectAnalysis) {
             AnalyzedQuerySpecification querySpec = ((SelectAnalysis) analysis).querySpecification();
-            TableInfo tableInfo = ((TableRelation) querySpec.sourceRelation()).tableInfo();
+            // TODO:
+            TableInfo tableInfo = ((TableRelation) querySpec.sourceRelations().get(0)).tableInfo();
             routing = tableInfo.getRouting(querySpec.whereClause());
             whereClause = querySpec.whereClause();
             isPartitioned = tableInfo.isPartitioned();
         } else {
-            whereClause = analysis.whereClause();
-            routing = analysis.table().getRouting(whereClause);
-            isPartitioned = analysis.table().isPartitioned();
+            throw new UnsupportedOperationException("NYI");
         }
         QueryAndFetchNode node = new QueryAndFetchNode("distributing collect",
                 routing,
@@ -140,10 +139,9 @@ class PlanNodeBuilder {
         if (analysis instanceof SelectAnalysis) {
             AnalyzedQuerySpecification querySpecification = ((SelectAnalysis) analysis).querySpecification();
             whereClause = querySpecification.whereClause();
-            tableInfo = ((TableRelation) querySpecification.sourceRelation()).tableInfo();
+            tableInfo = ((TableRelation) querySpecification.sourceRelations().get(0)).tableInfo();
         } else {
-            tableInfo = analysis.table();
-            whereClause = analysis.whereClause();
+            throw new UnsupportedOperationException("NYI");
         }
 
         Routing routing = tableInfo.getRouting(whereClause);

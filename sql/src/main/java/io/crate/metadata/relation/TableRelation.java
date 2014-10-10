@@ -28,7 +28,6 @@ import com.google.common.collect.Sets;
 import io.crate.analyze.EvaluatingNormalizer;
 import io.crate.analyze.Id;
 import io.crate.analyze.PrimaryKeyVisitor;
-import io.crate.analyze.where.PartitionResolver;
 import io.crate.analyze.where.WhereClause;
 import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.ReferenceInfo;
@@ -59,17 +58,15 @@ public class TableRelation implements AnalyzedRelation {
         }
     };
 
-    private final TableInfo tableInfo;
-    private final PartitionResolver partitionResolver;
+    protected final TableInfo tableInfo;
     private ImmutableList<TableInfo> tables;
     private WhereClause whereClause;
     private List<String> ids = new ArrayList<>();
     private List<String> routingValues = new ArrayList<>();
 
 
-    public TableRelation(TableInfo tableInfo, PartitionResolver partitionResolver) {
+    public TableRelation(TableInfo tableInfo) {
         this.tableInfo = tableInfo;
-        this.partitionResolver = partitionResolver;
     }
 
     public TableInfo tableInfo() {
@@ -95,11 +92,19 @@ public class TableRelation implements AnalyzedRelation {
     }
 
     @Override
+    public boolean hasNoResult() {
+        if (whereClause == null) {
+            return false;
+        } else {
+            return whereClause.noMatch();
+        }
+    }
+
+    @Deprecated
     public WhereClause whereClause() {
         return whereClause;
     }
 
-    @Override
     public void whereClause(WhereClause whereClause) {
         this.whereClause = whereClause;
         if (whereClause.hasQuery()) {
@@ -117,7 +122,7 @@ public class TableRelation implements AnalyzedRelation {
             }
 
             if (tableInfo.isPartitioned()) {
-                this.whereClause = partitionResolver.resolvePartitions(this.whereClause, tableInfo);
+                //this.whereClause = partitionResolver.resolvePartitions(this.whereClause, tableInfo);
             }
         }
     }
@@ -166,19 +171,6 @@ public class TableRelation implements AnalyzedRelation {
     @Override
     public <C, R> R accept(RelationVisitor<C, R> relationVisitor, C context) {
         return relationVisitor.visitTableRelation(this, context);
-    }
-
-    @Override
-    public boolean addressedBy(String relationName) {
-        return tableInfo.ident().name().equals(relationName);
-    }
-
-    @Override
-    public boolean addressedBy(@Nullable String schemaName, String tableName) {
-        if (schemaName == null) {
-            return addressedBy(tableName);
-        }
-        return tableInfo.schemaInfo().name().equals(schemaName) && addressedBy(tableName);
     }
 
     @Override

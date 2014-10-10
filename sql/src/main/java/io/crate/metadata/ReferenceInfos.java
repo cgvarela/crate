@@ -62,17 +62,31 @@ public class ReferenceInfos implements Iterable<SchemaInfo>{
      * @throws io.crate.exceptions.TableUnknownException if table given in <code>ident</code> does
      *         not exist in the given schema
      */
-    public TableInfo getTableInfoSafe(TableIdent ident) {
+    public TableInfo getTableInfoSafe(TableIdent ident) throws SchemaUnknownException, TableUnknownException {
         TableInfo info;
-        try {
-            info = getSchemaInfoSafe(ident.schema()).getTableInfo(ident.name());
-            if (info == null) {
-                throw new TableUnknownException(ident.name());
-            }
-        } catch (Exception e) {
-            throw new TableUnknownException(ident.name(), e);
+        info = getSchemaInfoSafe(ident.schema()).getTableInfo(ident.name());
+        if (info == null) {
+            throw new TableUnknownException(ident.name());
         }
         return info;
+    }
+
+    /**
+     * Similar to {@link #getTableInfoSafe(TableIdent)} but also verifies that the table can be modified
+     * @throws java.lang.UnsupportedOperationException
+     *
+     */
+    public TableInfo getEditableTableInfoSafe(TableIdent ident) throws UnsupportedOperationException {
+        TableInfo tableInfo = getTableInfoSafe(ident);
+        if (tableInfo.schemaInfo().systemSchema()) {
+            throw new UnsupportedOperationException(
+                    String.format("tables of schema '%s' are read only.", ident.schema()));
+        }
+        if (tableInfo.isAlias() && !tableInfo.isPartitioned()) {
+            throw new UnsupportedOperationException(
+                    String.format("aliases are read only cannot modify \"%s\"", ident.name()));
+        }
+        return tableInfo;
     }
 
     /**

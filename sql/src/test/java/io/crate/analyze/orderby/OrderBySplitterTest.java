@@ -21,8 +21,9 @@
 
 package io.crate.analyze.orderby;
 
-import io.crate.analyze.where.PartitionResolver;
-import io.crate.metadata.*;
+import io.crate.metadata.ColumnIdent;
+import io.crate.metadata.Routing;
+import io.crate.metadata.TableIdent;
 import io.crate.metadata.relation.AnalyzedRelation;
 import io.crate.metadata.relation.JoinRelation;
 import io.crate.metadata.relation.TableRelation;
@@ -42,8 +43,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.*;
-import static org.mockito.Mockito.mock;
+import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.is;
 
 public class OrderBySplitterTest {
 
@@ -53,13 +54,13 @@ public class OrderBySplitterTest {
             .add(ColumnIdent.fromPath("id"), DataTypes.INTEGER)
             .addPrimaryKey("id")
             .add("name", DataTypes.STRING, null)
-            .build(), mock(PartitionResolver.class));
+            .build());
     private TableRelation relation2 = new TableRelation(TestingTableInfo.builder(
             new TableIdent(null, "t2"), RowGranularity.DOC, new Routing())
             .add(ColumnIdent.fromPath("id"), DataTypes.INTEGER)
             .addPrimaryKey("id")
             .add("name", DataTypes.STRING, null)
-            .build(), mock(PartitionResolver.class));
+            .build());
 
     @Test
     public void testSplitOrderByReferences() throws Exception {

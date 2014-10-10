@@ -22,7 +22,6 @@
 package io.crate.metadata.relation;
 
 import io.crate.analyze.EvaluatingNormalizer;
-import io.crate.analyze.where.WhereClause;
 import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.table.TableInfo;
 import io.crate.planner.symbol.Reference;
@@ -40,9 +39,7 @@ public interface AnalyzedRelation {
      */
     public int numRelations();
 
-    public WhereClause whereClause();
-
-    public void whereClause(WhereClause whereClause);
+    public boolean hasNoResult();
 
     public Reference getReference(@Nullable String schema,
                                   @Nullable String tableOrAlias,
@@ -56,40 +53,6 @@ public interface AnalyzedRelation {
     public List<TableInfo> tables();
 
     public <C, R> R accept(RelationVisitor<C, R> relationVisitor, C context);
-
-
-    // TODO: addressedBy methods can probably be removed if there is one getRelationOutput() method that also takes schema and table/alias names
-
-    /**
-     * <p>
-     * This method returns true if a relation can be addressed by a tableName or alias
-     * </p>
-     *
-     * <p>
-     * <b>Example</b>:<br />
-     *  join relation: <code>join(cross_join, a, b)</code> can resolve both tableNames "a" and "b"
-     * </p>
-     *
-     * <p>
-     * <b>Example</b>: <br />
-     *   sub select: <code>select a.name from (select "firstName" as name from users) a</code>
-     *   <br /><br />
-     *   In this case the AliasedAnalyzedRelation (alias=a, child=...) can resolve to alias "a"
-     * </p>
-     *
-     * Implementations should only resolve to one level (so the second example wouldn't resolve to users)
-     *
-     * @param relationName tableName or alias
-     * @return true or false
-     */
-    boolean addressedBy(String relationName);
-
-    /**
-     * returns true if the relation resolves to schemaName and tableName
-     *
-     * See also {@link #addressedBy(String)}
-     */
-    boolean addressedBy(@Nullable String schemaName, String tableName);
 
     void normalize(EvaluatingNormalizer normalizer);
 }

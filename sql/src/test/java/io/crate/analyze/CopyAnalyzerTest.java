@@ -79,14 +79,14 @@ public class CopyAnalyzerTest extends BaseAnalyzerTest {
     @Test
     public void testCopyFromExistingTable() throws Exception {
         CopyAnalysis analysis = (CopyAnalysis)analyze("copy users from '/some/distant/file.ext'");
-        assertThat(analysis.table().ident(), is(TEST_DOC_TABLE_IDENT));
+        assertThat(analysis.tableInfo().ident(), is(TEST_DOC_TABLE_IDENT));
         assertLiteralSymbol(analysis.uri(), "/some/distant/file.ext");
     }
 
     @Test
     public void testCopyFromExistingPartitionedTable() throws Exception {
         CopyAnalysis analysis = (CopyAnalysis)analyze("copy parted from '/some/distant/file.ext'");
-        assertThat(analysis.table().ident(), is(TEST_PARTITIONED_TABLE_IDENT));
+        assertThat(analysis.tableInfo().ident(), is(TEST_PARTITIONED_TABLE_IDENT));
         assertLiteralSymbol(analysis.uri(), "/some/distant/file.ext");
     }
 
@@ -122,14 +122,14 @@ public class CopyAnalyzerTest extends BaseAnalyzerTest {
     public void testCopyFromParameter() throws Exception {
         String path = "/some/distant/file.ext";
         CopyAnalysis analysis = (CopyAnalysis)analyze("copy users from ?", new Object[]{path});
-        assertThat(analysis.table().ident(), is(TEST_DOC_TABLE_IDENT));
+        assertThat(analysis.tableInfo().ident(), is(TEST_DOC_TABLE_IDENT));
         assertThat((String)((Parameter)analysis.uri()).value(), is(path));
     }
 
     @Test
     public void testCopyToFile() throws Exception {
         CopyAnalysis analysis = (CopyAnalysis)analyze("copy users to '/blah.txt'");
-        assertThat(analysis.table().ident(), is(TEST_DOC_TABLE_IDENT));
+        assertThat(analysis.tableInfo().ident(), is(TEST_DOC_TABLE_IDENT));
         assertThat(analysis.mode(), is(CopyAnalysis.Mode.TO));
         assertLiteralSymbol(analysis.uri(), "/blah.txt");
     }
@@ -151,7 +151,7 @@ public class CopyAnalyzerTest extends BaseAnalyzerTest {
     @Test
     public void testCopyToFileWithParams() throws Exception {
         CopyAnalysis analysis = (CopyAnalysis)analyze("copy users to '/blah.txt' with (compression='gzip')");
-        assertThat(analysis.table().ident(), is(TEST_DOC_TABLE_IDENT));
+        assertThat(analysis.tableInfo().ident(), is(TEST_DOC_TABLE_IDENT));
         assertThat(analysis.mode(), is(CopyAnalysis.Mode.TO));
 
         assertLiteralSymbol(analysis.uri(), "/blah.txt");
@@ -161,7 +161,7 @@ public class CopyAnalyzerTest extends BaseAnalyzerTest {
     @Test
     public void testCopyToFileWithPartitionedTable() throws Exception {
         CopyAnalysis analysis = (CopyAnalysis) analyze("copy parted to '/blah.txt'");
-        assertThat(analysis.table().ident(), is(TEST_PARTITIONED_TABLE_IDENT));
+        assertThat(analysis.tableInfo().ident(), is(TEST_PARTITIONED_TABLE_IDENT));
         assertThat(analysis.mode(), is(CopyAnalysis.Mode.TO));
     }
 

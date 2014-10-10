@@ -63,7 +63,6 @@ public class AlterTableAnalysis extends AbstractDDLAnalysis {
         }
     }
 
-    @Override
     public TableInfo table() {
         return tableInfo;
     }

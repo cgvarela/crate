@@ -21,43 +21,41 @@
 
 package io.crate.analyze;
 
-import com.google.common.base.Preconditions;
+import io.crate.analyze.where.WhereClause;
 import io.crate.metadata.Functions;
 import io.crate.metadata.ReferenceInfos;
 import io.crate.metadata.ReferenceResolver;
-import io.crate.metadata.TableIdent;
-import io.crate.metadata.relation.TableRelation;
+import io.crate.metadata.relation.AnalyzedRelation;
 import io.crate.planner.symbol.RelationSymbol;
 import io.crate.planner.symbol.Symbol;
 import io.crate.sql.tree.Delete;
-import io.crate.sql.tree.Table;
 import org.elasticsearch.common.inject.Inject;
 
 public class DeleteStatementAnalyzer extends AbstractStatementAnalyzer<Symbol, DeleteAnalysis> {
 
     final DataStatementAnalyzer<DeleteAnalysis.NestedDeleteAnalysis> innerAnalyzer =
-        new DataStatementAnalyzer<DeleteAnalysis.NestedDeleteAnalysis>() {
+            new DataStatementAnalyzer<DeleteAnalysis.NestedDeleteAnalysis>() {
 
-            @Override
-            public Symbol visitDelete(Delete node, DeleteAnalysis.NestedDeleteAnalysis context) {
-                process(node.getRelation(), context);
-                context.whereClause(generateWhereClause(node.getWhere(), context));
+        @Override
+        public Symbol visitDelete(Delete node, DeleteAnalysis.NestedDeleteAnalysis context) {
+            Symbol relationSymbol = process(node.getRelation(), context);
+            assert relationSymbol instanceof RelationSymbol;
 
-                return null;
+            AnalyzedRelation relation = ((RelationSymbol) relationSymbol).relation();
+            context.relation(relation);
+            if (node.getWhere().isPresent()) {
+                Symbol query = process(node.getWhere().get(), context);
+                context.whereClause(new WhereClause(context.normalizer.normalize(query)));
+            } else {
+                context.whereClause(WhereClause.MATCH_ALL);
             }
+            return new RelationSymbol(relation);
+        }
 
-            @Override
-            public Analysis newAnalysis(Analyzer.ParameterContext parameterContext) {
-                return new UpdateAnalysis.NestedAnalysis(
+        @Override
+        public Analysis newAnalysis(Analyzer.ParameterContext parameterContext){
+            return new UpdateAnalysis.NestedAnalysis(
                     referenceInfos, functions, parameterContext, globalReferenceResolver);
-            }
-
-            @Override
-        protected Symbol visitTable(Table node, DeleteAnalysis.NestedDeleteAnalysis context) {
-            Preconditions.checkState(context.table() == null, "deleting multiple tables is not supported");
-            context.editableTable(TableIdent.of(node));
-
-            return new RelationSymbol(new TableRelation(context.table(), context.partitionResolver()));
         }
     };
 

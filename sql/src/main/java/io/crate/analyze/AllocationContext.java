@@ -21,12 +21,15 @@
 
 package io.crate.analyze;
 
+import io.crate.exceptions.AmbiguousColumnException;
+import io.crate.exceptions.ColumnUnknownException;
 import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.ReferenceInfo;
 import io.crate.metadata.ReferenceInfos;
 import io.crate.metadata.TableIdent;
 import io.crate.metadata.relation.AnalyzedRelation;
 import io.crate.metadata.sys.SysSchemaInfo;
+import io.crate.planner.symbol.DynamicReference;
 import io.crate.planner.symbol.Function;
 import io.crate.planner.symbol.Reference;
 import io.crate.sql.tree.QualifiedName;
@@ -40,7 +43,8 @@ import java.util.Map;
 public class AllocationContext {
 
     private final ReferenceInfos referenceInfos;
-    public AnalyzedRelation currentRelation = null;
+    private List<AnalyzedRelation> currentRelations = null;
+    private AnalyzedRelation currentRelation = null;
     public final Map<ReferenceInfo, Reference> allocatedReferences = new HashMap<>();
     public final Map<Function, Function> allocatedFunctions = new HashMap<>();
 
@@ -59,26 +63,27 @@ public class AllocationContext {
     }
 
     public Reference resolveReference(QualifiedName name, @Nullable List<String> path, boolean forWrite) {
-        assert currentRelation != null : "currentRelation must be set in order to resolve a qualifiedName";
+        assert currentRelations != null || currentRelation != null :
+                "currentRelation must be set in order to resolve a qualifiedName";
 
-        ColumnIdent columnIdent;
         List<String> parts = name.getParts();
+        String schema = null;
+        String tableOrAlias = null;
+        ColumnIdent columnIdent;
+
         switch (parts.size()) {
             case 1:
                 columnIdent = new ColumnIdent(parts.get(0), path);
                 break;
             case 2:
-                if (!currentRelation.addressedBy(parts.get(0))) {
-                    throw new UnsupportedOperationException("table for reference not found in FROM: " + name);
-                } else {
-                    columnIdent = new ColumnIdent(parts.get(1), path);
-                }
+                tableOrAlias = parts.get(0);
+                columnIdent = new ColumnIdent(parts.get(1), path);
                 break;
             case 3:
-                String schemaName = parts.get(0).toLowerCase(Locale.ENGLISH);
+                schema = parts.get(0).toLowerCase(Locale.ENGLISH);
 
                 // enables statements like : select sys.shards.id, * from blob.myblobs
-                if (schemaName.equals(SysSchemaInfo.NAME)) {
+                if (schema.equals(SysSchemaInfo.NAME)) {
                     hasSysExpressions = true;
                     TableIdent sysTableIdent = new TableIdent(SysSchemaInfo.NAME, parts.get(1));
                     columnIdent = new ColumnIdent(parts.get(2), path);
@@ -86,9 +91,8 @@ public class AllocationContext {
                     Reference reference = new Reference(referenceInfo);
                     allocatedReferences.put(referenceInfo, reference);
                     return reference;
-                } else if (!currentRelation.addressedBy(schemaName, parts.get(1))) {
-                    throw new UnsupportedOperationException("table for reference not found in FROM: " + name);
                 } else {
+                    tableOrAlias = parts.get(1);
                     columnIdent = new ColumnIdent(parts.get(2), path);
                 }
                 break;
@@ -98,9 +102,36 @@ public class AllocationContext {
                         "\"<column>\", \"<table>.<column>\" or \"<schema>.<table>.<column>\"");
         }
 
-        // TODO: use RelationOutput
-        Reference reference = currentRelation.getReference(null, null, columnIdent, forWrite);
+        Reference reference = null;
+        if (currentRelations != null) {
+            assert currentRelation == null : "can't have both currentRelation and currentRelations set";
+            for (AnalyzedRelation currentRelation : currentRelations) {
+                Reference currentRef = currentRelation.getReference(schema, tableOrAlias, columnIdent, forWrite);
+                if (reference == null) {
+                    reference = currentRef;
+                } else if (currentRef != null
+                        && !((currentRef instanceof DynamicReference) || (reference instanceof DynamicReference))) {
+                    throw new AmbiguousColumnException(columnIdent.sqlFqn());
+                }
+            }
+        } else {
+            assert currentRelation != null : "must have either currentRelations or currentRelation set";
+            reference = currentRelation.getReference(schema, tableOrAlias, columnIdent, forWrite);
+        }
+        if (reference == null) {
+            throw new ColumnUnknownException(columnIdent.sqlFqn());
+        }
         allocatedReferences.put(reference.info(), reference);
         return reference;
+    }
+
+    public void setRelation(AnalyzedRelation analyzedRelation) {
+        currentRelation = analyzedRelation;
+        currentRelations = null;
+    }
+
+    public void setRelation(List<AnalyzedRelation> analyzedRelations) {
+        currentRelation = null;
+        currentRelations = analyzedRelations;
     }
 }

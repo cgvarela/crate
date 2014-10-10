@@ -27,7 +27,7 @@ import java.util.Set;
 
 public class Constants {
 
-    public static final boolean DEBUG_MODE = false;
+    public static final boolean DEBUG_MODE = true;
     /**
      * Mapping Type that contains table definitions
      */

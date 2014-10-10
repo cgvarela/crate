@@ -24,18 +24,12 @@ package io.crate.analyze;
 import com.google.common.base.Preconditions;
 import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.ReferenceInfo;
-import io.crate.metadata.TableIdent;
-import io.crate.metadata.relation.TableRelation;
 import io.crate.planner.symbol.Reference;
-import io.crate.planner.symbol.RelationSymbol;
-import io.crate.planner.symbol.Symbol;
 import io.crate.sql.tree.Insert;
-import io.crate.sql.tree.Table;
 
 import java.util.ArrayList;
 
 public abstract class AbstractInsertAnalyzer<T extends AbstractInsertAnalysis> extends DataStatementAnalyzer<T> {
-
 
     protected void handleInsertColumns(Insert node, int maxInsertValues, T context) {
         // allocate columnsLists
@@ -73,18 +67,6 @@ public abstract class AbstractInsertAnalyzer<T extends AbstractInsertAnalysis> e
         if (clusteredBy != null && !clusteredBy.name().equalsIgnoreCase("_id") && context.routingColumnIndex() < 0) {
             throw new IllegalArgumentException("Clustered by value is required but is missing from the insert statement");
         }
-    }
-
-    @Override
-    protected Symbol visitTable(Table node, T context) {
-        Preconditions.checkState(context.table() == null, "inserting into multiple tables is not supported");
-
-        context.editableTable(TableIdent.of(node));
-
-        if (context.table().isAlias() && !context.table().isPartitioned()) {
-            throw new IllegalArgumentException("Table alias not allowed in INSERT statement.");
-        }
-        return new RelationSymbol(new TableRelation(context.table(), context.partitionResolver()));
     }
 
     /**

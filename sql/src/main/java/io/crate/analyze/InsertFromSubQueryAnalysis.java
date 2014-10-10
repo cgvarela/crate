@@ -49,6 +49,11 @@ public class InsertFromSubQueryAnalysis extends AbstractInsertAnalysis {
     }
 
     @Override
+    public boolean hasNoResult() {
+        return subQueryAnalysis.hasNoResult();
+    }
+
+    @Override
     public <C, R> R accept(AnalysisVisitor<C, R> analysisVisitor, C context) {
         return analysisVisitor.visitInsertFromSubQueryAnalysis(this, context);
     }

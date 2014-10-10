@@ -71,11 +71,6 @@ public class CreateTableAnalysis extends AbstractDDLAnalysis {
         super.table(tableIdent); // name validated here
     }
 
-    @Override
-    public TableInfo table() {
-        return null;
-    }
-
     /**
      * checks if the given TableInfo has been created from an orphaned alias left from
      * an incomplete drop table on a partitioned table

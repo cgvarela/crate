@@ -54,7 +54,6 @@ public class DropBlobTableAnalysis extends AbstractDDLAnalysis {
         }
     }
 
-    @Override
     public TableInfo table() {
         return tableInfo;
     }

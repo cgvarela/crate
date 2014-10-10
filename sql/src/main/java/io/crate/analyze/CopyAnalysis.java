@@ -25,11 +25,14 @@ import io.crate.PartitionName;
 import io.crate.metadata.Functions;
 import io.crate.metadata.ReferenceInfos;
 import io.crate.metadata.ReferenceResolver;
+import io.crate.metadata.TableIdent;
+import io.crate.metadata.table.TableInfo;
 import io.crate.planner.symbol.Symbol;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 
 import javax.annotation.Nullable;
+import java.util.List;
 
 public class CopyAnalysis extends AbstractDataAnalysis {
 
@@ -44,12 +47,35 @@ public class CopyAnalysis extends AbstractDataAnalysis {
     private Mode mode;
     private boolean directoryUri;
     private String partitionIdent = null;
+    private List<Symbol> outputSymbols;
+    private TableInfo tableInfo;
 
     public CopyAnalysis(ReferenceInfos referenceInfos,
                         Functions functions,
                         Analyzer.ParameterContext parameterContext,
                         ReferenceResolver referenceResolver) {
         super(referenceInfos, functions, parameterContext, referenceResolver);
+    }
+
+    @Override
+    public TableInfo getTableInfo(TableIdent tableIdent) {
+        return referenceInfos.getTableInfoSafe(tableIdent);
+    }
+
+    public TableInfo tableInfo() {
+        return tableInfo;
+    }
+
+    public void tableInfo(TableInfo tableInfo) {
+        this.tableInfo = tableInfo;
+    }
+
+    public List<Symbol> outputSymbols() {
+        return outputSymbols;
+    }
+
+    public void outputSymbols(List<Symbol> outputSymbols) {
+        this.outputSymbols = outputSymbols;
     }
 
     public Symbol uri() {
@@ -94,9 +120,14 @@ public class CopyAnalysis extends AbstractDataAnalysis {
     }
 
     public boolean partitionExists(String partitionIdent){
-        if (table.isPartitioned() && partitionIdent != null ){
-            return table.partitions().contains(PartitionName.fromPartitionIdent(table.ident().name(), partitionIdent));
+        if (tableInfo.isPartitioned() && partitionIdent != null ){
+            return tableInfo.partitions().contains(PartitionName.fromPartitionIdent(tableInfo.ident().name(), partitionIdent));
         }
+        return false;
+    }
+
+    @Override
+    public boolean hasNoResult() {
         return false;
     }
 

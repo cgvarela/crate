@@ -43,7 +43,6 @@ import static io.crate.testing.TestingHelpers.*;
 import static io.crate.testing.TestingHelpers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
-import static org.mockito.Mockito.mock;
 
 public class WhereClauseSplitterTest {
 
@@ -54,13 +53,13 @@ public class WhereClauseSplitterTest {
             .add(ColumnIdent.fromPath("dep_id"), DataTypes.INTEGER)
             .addPrimaryKey("id")
             .add("name", DataTypes.STRING, null)
-            .build(), mock(PartitionResolver.class));
+            .build());
     private TableRelation tableDeps = new TableRelation(TestingTableInfo.builder(
             new TableIdent("doc", "deps"), RowGranularity.DOC, new Routing())
             .add(ColumnIdent.fromPath("id"), DataTypes.INTEGER)
             .addPrimaryKey("id")
             .add("name", DataTypes.STRING, null)
-            .build(), mock(PartitionResolver.class));
+            .build());
     private JoinRelation joinRelation =
             new JoinRelation(JoinRelation.Type.CROSS_JOIN, tableEmps, tableDeps);
 

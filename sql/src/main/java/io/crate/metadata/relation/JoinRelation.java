@@ -23,7 +23,6 @@ package io.crate.metadata.relation;
 
 import com.google.common.collect.ImmutableList;
 import io.crate.analyze.EvaluatingNormalizer;
-import io.crate.analyze.where.WhereClause;
 import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.table.TableInfo;
 import io.crate.planner.symbol.Reference;
@@ -76,14 +75,8 @@ public class JoinRelation implements AnalyzedRelation {
     }
 
     @Override
-    public WhereClause whereClause() {
-        // TODO:
-        return null;
-    }
-
-    @Override
-    public void whereClause(WhereClause whereClause) {
-        // TODO: integrate whereClause splitter
+    public boolean hasNoResult() {
+        return true; // TODO:
     }
 
     @Override
@@ -103,16 +96,6 @@ public class JoinRelation implements AnalyzedRelation {
     @Override
     public <C, R> R accept(RelationVisitor<C, R> relationVisitor, C context) {
         return relationVisitor.visitCrossJoinRelation(this, context);
-    }
-
-    @Override
-    public boolean addressedBy(String relationName) {
-        return left.addressedBy(relationName) || right.addressedBy(relationName);
-    }
-
-    @Override
-    public boolean addressedBy(@Nullable String schemaName, String tableName) {
-        return left.addressedBy(schemaName, tableName) || right.addressedBy(schemaName, tableName);
     }
 
     @Override

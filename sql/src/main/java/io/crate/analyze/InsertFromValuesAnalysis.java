@@ -45,9 +45,8 @@ public class InsertFromValuesAnalysis extends AbstractInsertAnalysis {
         super(referenceInfos, functions, parameterContext, referenceResolver);
     }
 
-    @Override
     public void editableTable(TableIdent tableIdent) {
-        super.editableTable(tableIdent);
+        //super.editableTable(tableIdent);
         if (table().isPartitioned()) {
             for (Map<String, String> partitionMap : partitionMaps) {
                 partitionMap = new HashMap<>(table().partitionedByColumns().size());
@@ -100,12 +99,16 @@ public class InsertFromValuesAnalysis extends AbstractInsertAnalysis {
     }
 
     @Override
-    public void addIdAndRouting(List<BytesRef> primaryKeyValues, String clusteredByValue) {
-        addIdAndRouting(true, primaryKeyValues, clusteredByValue);
+    public boolean hasNoResult() {
+        return false;
     }
 
     @Override
     public <C, R> R accept(AnalysisVisitor<C, R> analysisVisitor, C context) {
         return analysisVisitor.visitInsertFromValuesAnalysis(this, context);
+    }
+
+    public void addIdAndRouting(List<BytesRef> primaryKeyValues, String routingValue) {
+        // TODO: implement
     }
 }
