@@ -22,21 +22,23 @@
 package io.crate.metadata.doc;
 
 import io.crate.Constants;
-import io.crate.PartitionName;
-import io.crate.exceptions.TableUnknownException;
+import io.crate.exceptions.RelationUnknown;
 import io.crate.exceptions.UnhandledServerException;
-import io.crate.metadata.TableIdent;
-import org.elasticsearch.action.admin.indices.template.put.TransportPutIndexTemplateAction;
+import io.crate.metadata.Functions;
+import io.crate.metadata.IndexParts;
+import io.crate.metadata.PartitionName;
+import io.crate.metadata.RelationName;
+import org.apache.logging.log4j.Logger;
+import org.elasticsearch.Version;
 import org.elasticsearch.action.support.IndicesOptions;
-import org.elasticsearch.cluster.ClusterService;
+import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.metadata.IndexTemplateMetaData;
 import org.elasticsearch.cluster.metadata.MetaData;
-import org.elasticsearch.common.io.FileSystemUtils;
-import org.elasticsearch.common.logging.ESLogger;
-import org.elasticsearch.common.logging.ESLoggerFactory;
+import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.indices.IndexMissingException;
+import org.elasticsearch.index.IndexNotFoundException;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -46,77 +48,89 @@ import java.util.Locale;
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_NUMBER_OF_REPLICAS;
 import static org.elasticsearch.cluster.metadata.IndexMetaData.SETTING_NUMBER_OF_SHARDS;
 
-public class DocTableInfoBuilder {
+class DocTableInfoBuilder {
 
-    private final TableIdent ident;
-    private final MetaData metaData;
+    private final RelationName ident;
+    private final ClusterState state;
     private final boolean checkAliasSchema;
-    private final DocSchemaInfo docSchemaInfo;
-    private final ClusterService clusterService;
-    private final TransportPutIndexTemplateAction transportPutIndexTemplateAction;
+    private final Functions functions;
+    private final IndexNameExpressionResolver indexNameExpressionResolver;
+    private final MetaData metaData;
     private String[] concreteIndices;
-    ESLogger logger = ESLoggerFactory.getLogger(FileSystemUtils.class.getName());
+    private String[] concreteOpenIndices;
+    private static final Logger logger = Loggers.getLogger(DocTableInfoBuilder.class);
 
-    public DocTableInfoBuilder(DocSchemaInfo docSchemaInfo,
-                               TableIdent ident,
-                               ClusterService clusterService,
-                               TransportPutIndexTemplateAction transportPutIndexTemplateAction,
-                               boolean checkAliasSchema) {
-        this.docSchemaInfo = docSchemaInfo;
-        this.clusterService = clusterService;
-        this.transportPutIndexTemplateAction = transportPutIndexTemplateAction;
-        this.metaData = clusterService.state().metaData();
+    DocTableInfoBuilder(Functions functions,
+                        RelationName ident,
+                        ClusterState state,
+                        IndexNameExpressionResolver indexNameExpressionResolver,
+                        boolean checkAliasSchema) {
+        this.functions = functions;
+        this.indexNameExpressionResolver = indexNameExpressionResolver;
         this.ident = ident;
+        this.state = state;
+        this.metaData = state.metaData();
         this.checkAliasSchema = checkAliasSchema;
     }
 
-    public DocIndexMetaData docIndexMetaData() {
+    private DocIndexMetaData docIndexMetaData() {
         DocIndexMetaData docIndexMetaData;
-        String templateName = PartitionName.templateName(ident.name());
+        String templateName = PartitionName.templateName(ident.schema(), ident.name());
         boolean createdFromTemplate = false;
         if (metaData.getTemplates().containsKey(templateName)) {
-            docIndexMetaData = buildDocIndexMetaDataFromTemplate(ident.name(), templateName);
+            docIndexMetaData = buildDocIndexMetaDataFromTemplate(ident.indexName(), templateName);
             createdFromTemplate = true;
-            try {
-                concreteIndices = metaData.concreteIndices(IndicesOptions.strictExpandOpen(), ident.name());
-            } catch(IndexMissingException e) {
-                // no partition created yet
-                concreteIndices = new String[]{};
-            }
+            // We need all concrete indices, regardless of their state, for operations such as reopening.
+            concreteIndices = indexNameExpressionResolver.concreteIndexNames(
+                state, IndicesOptions.lenientExpandOpen(), ident.indexName());
+            // We need all concrete open indices, as closed indices must not appear in the routing.
+            concreteOpenIndices = indexNameExpressionResolver.concreteIndexNames(
+                state, IndicesOptions.fromOptions(true, true, true,
+                    false, IndicesOptions.strictExpandOpenAndForbidClosed()), ident.indexName());
         } else {
             try {
-                concreteIndices = metaData.concreteIndices(IndicesOptions.strictExpandOpen(), ident.name());
+                concreteIndices = indexNameExpressionResolver.concreteIndexNames(
+                    state, IndicesOptions.strictExpandOpen(), ident.indexName());
+                concreteOpenIndices = concreteIndices;
+                if (concreteIndices.length == 0) {
+                    // no matching index found
+                    throw new RelationUnknown(ident);
+                }
                 docIndexMetaData = buildDocIndexMetaData(concreteIndices[0]);
-            } catch (IndexMissingException ex) {
-                throw new TableUnknownException(ident.name(), ex);
+            } catch (IndexNotFoundException ex) {
+                throw new RelationUnknown(ident.fqn(), ex);
             }
         }
 
-        if ((!createdFromTemplate && concreteIndices.length == 1)
-                || !checkAliasSchema) {
+        if (!checkAliasSchema || concreteIndices.length == 1) {
             return docIndexMetaData;
         }
-        for (int i = 0; i < concreteIndices.length; i++) {
-            try {
-                docIndexMetaData = docIndexMetaData.merge(
-                        buildDocIndexMetaData(concreteIndices[i]),
-                        transportPutIndexTemplateAction,
-                        createdFromTemplate);
-            } catch (IOException e) {
-                throw new UnhandledServerException("Unable to merge/build new DocIndexMetaData", e);
+        if (!createdFromTemplate) {
+            for (String concreteIndex : concreteIndices) {
+                docIndexMetaData = docIndexMetaData.ensureEqual(buildDocIndexMetaData(concreteIndex));
             }
         }
         return docIndexMetaData;
     }
 
-    private DocIndexMetaData buildDocIndexMetaData(String index) {
+    private DocIndexMetaData buildDocIndexMetaData(String indexName) {
         DocIndexMetaData docIndexMetaData;
+        IndexMetaData indexMetaData = metaData.index(indexName);
         try {
-            docIndexMetaData = new DocIndexMetaData(metaData.index(index), ident);
+            docIndexMetaData = new DocIndexMetaData(functions, indexMetaData, ident);
         } catch (IOException e) {
             throw new UnhandledServerException("Unable to build DocIndexMetaData", e);
         }
-        return docIndexMetaData.build();
+        try {
+            return docIndexMetaData.build();
+        } catch (Exception e) {
+            try {
+                logger.error(
+                    "Could not build DocIndexMetaData from: {}", indexMetaData.mapping("default").getSourceAsMap());
+            } catch (Exception ignored) {
+            }
+            throw e;
+        }
     }
 
     private DocIndexMetaData buildDocIndexMetaDataFromTemplate(String index, String templateName) {
@@ -125,49 +139,70 @@ public class DocTableInfoBuilder {
         try {
             IndexMetaData.Builder builder = new IndexMetaData.Builder(index);
             builder.putMapping(Constants.DEFAULT_MAPPING_TYPE,
-                    indexTemplateMetaData.getMappings().get(Constants.DEFAULT_MAPPING_TYPE).toString());
-            Settings settings = indexTemplateMetaData.settings();
+                indexTemplateMetaData.getMappings().get(Constants.DEFAULT_MAPPING_TYPE).toString());
+
+            Settings.Builder settingsBuilder = Settings.builder()
+                .put(indexTemplateMetaData.settings())
+                .put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT);
+
+            Settings settings = settingsBuilder.build();
             builder.settings(settings);
-            // default values
             builder.numberOfShards(settings.getAsInt(SETTING_NUMBER_OF_SHARDS, 5));
             builder.numberOfReplicas(settings.getAsInt(SETTING_NUMBER_OF_REPLICAS, 1));
-            docIndexMetaData = new DocIndexMetaData(builder.build(), ident);
+            docIndexMetaData = new DocIndexMetaData(functions, builder.build(), ident);
         } catch (IOException e) {
             throw new UnhandledServerException("Unable to build DocIndexMetaData from template", e);
         }
         return docIndexMetaData.build();
     }
 
-    public DocTableInfo build() {
-        DocIndexMetaData md = docIndexMetaData();
-
+    private List<PartitionName> buildPartitions(DocIndexMetaData md) {
         List<PartitionName> partitions = new ArrayList<>();
         if (md.partitionedBy().size() > 0) {
-            for(String index : concreteIndices) {
-                if (PartitionName.isPartition(index, ident.name())) {
+            for (String indexName : concreteIndices) {
+                if (IndexParts.isPartitioned(indexName)) {
                     try {
-                        PartitionName partitionName = PartitionName.fromString(index, ident.name());
+                        PartitionName partitionName = PartitionName.fromIndexOrTemplate(indexName);
+                        assert partitionName.relationName().equals(ident) : "ident must equal partitionName";
                         partitions.add(partitionName);
                     } catch (IllegalArgumentException e) {
                         // ignore
-                        logger.warn(String.format(Locale.ENGLISH, "Cannot build partition %s of index %s", index, ident.name()));
+                        logger.warn(String.format(Locale.ENGLISH, "Cannot build partition %s of index %s", indexName, ident.indexName()));
                     }
                 }
             }
         }
-
-        return new DocTableInfo(
-                docSchemaInfo,
-                ident,
-                md.columns(),
-                md.partitionedByColumns(),
-                md.indices(),
-                md.references(), md.primaryKey(), md.routingCol(),
-                md.isAlias(), md.hasAutoGeneratedPrimaryKey(),
-                concreteIndices, clusterService,
-                md.numberOfShards(), md.numberOfReplicas(),
-                md.partitionedBy(),
-                partitions);
+        return partitions;
     }
 
+    public DocTableInfo build() {
+        DocIndexMetaData md = docIndexMetaData();
+        List<PartitionName> partitions = buildPartitions(md);
+
+        return new DocTableInfo(
+            ident,
+            md.columns(),
+            md.partitionedByColumns(),
+            md.generatedColumnReferences(),
+            md.notNullColumns(),
+            md.indices(),
+            md.references(),
+            md.analyzers(),
+            md.primaryKey(),
+            md.routingCol(),
+            md.isAlias(),
+            md.hasAutoGeneratedPrimaryKey(),
+            concreteIndices,
+            concreteOpenIndices,
+            indexNameExpressionResolver,
+            md.numberOfShards(), md.numberOfReplicas(),
+            md.tableParameters(),
+            md.partitionedBy(),
+            partitions,
+            md.columnPolicy(),
+            md.versionCreated(),
+            md.versionUpgraded(),
+            md.isClosed(),
+            md.supportedOperations());
+    }
 }

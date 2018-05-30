@@ -21,19 +21,20 @@
 
 package io.crate.sql.tree;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
+
+import java.util.Locale;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
 @Immutable
 public class Extract
-        extends Expression
-{
+    extends Expression {
     private final Expression expression;
     private final Field field;
 
-    public enum Field
-    {
+    public enum Field {
         CENTURY,
         YEAR,
         QUARTER,
@@ -49,37 +50,33 @@ public class Extract
         MINUTE,
         SECOND,
         TIMEZONE_HOUR,
-        TIMEZONE_MINUTE
+        TIMEZONE_MINUTE,
+        EPOCH
     }
 
-    public Extract(Expression expression, Field field)
-    {
+    public Extract(@Nullable Expression expression, StringLiteral field) {
         checkNotNull(expression, "expression is null");
-        checkNotNull(field, "field is null");
-
+        // field: ident is converted to StringLiteral in SqlBase.g
         this.expression = expression;
-        this.field = field;
+        this.field = Field.valueOf(field.getValue().toUpperCase(Locale.ENGLISH));
     }
 
-    public Expression getExpression()
-    {
+    @Nullable
+    public Expression getExpression() {
         return expression;
     }
 
-    public Field getField()
-    {
+    public Field getField() {
         return field;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitExtract(this, context);
     }
 
     @Override
-    public boolean equals(Object o)
-    {
+    public boolean equals(Object o) {
         if (this == o) {
             return true;
         }
@@ -92,7 +89,7 @@ public class Extract
         if (!expression.equals(that.expression)) {
             return false;
         }
-        if (field != that.field) {
+        if (!field.equals(that.field)) {
             return false;
         }
 
@@ -100,8 +97,7 @@ public class Extract
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         int result = expression.hashCode();
         result = 31 * result + field.hashCode();
         return result;

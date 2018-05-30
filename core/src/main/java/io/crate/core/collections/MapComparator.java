@@ -22,6 +22,8 @@
 package io.crate.core.collections;
 
 import com.google.common.base.Preconditions;
+import io.crate.types.DataType;
+import io.crate.types.DataTypes;
 
 import java.util.Comparator;
 import java.util.Map;
@@ -30,7 +32,8 @@ public class MapComparator implements Comparator<Map> {
 
     private static final MapComparator INSTANCE = new MapComparator();
 
-    private MapComparator() {}
+    private MapComparator() {
+    }
 
     public static MapComparator getInstance() {
         return INSTANCE;
@@ -39,27 +42,33 @@ public class MapComparator implements Comparator<Map> {
     public static <K, V> int compareMaps(Map<K, V> m1, Map<K, V> m2) {
         Preconditions.checkNotNull(m1, "map is null");
         Preconditions.checkNotNull(m2, "map is null");
-        int sizeCompare = Integer.valueOf(m1.size()).compareTo(m2.size());
+        int sizeCompare = Integer.compare(m1.size(), m2.size());
         if (sizeCompare != 0)
             return sizeCompare;
-        for (K key: m1.keySet()) {
-            if (!m1.get(key).equals(m2.get(key)))
-                return 1;
-        }
-        return 0;
-    }
 
-    public static <K, V extends Comparable<V>> int compareMapsComparable(Map<K, V> m1, Map<K, V> m2) {
-        Preconditions.checkNotNull(m1, "map is null");
-        Preconditions.checkNotNull(m2, "map is null");
-        int sizeCompare = Integer.valueOf(m1.size()).compareTo(m2.size());
-        if (sizeCompare != 0)
-            return sizeCompare;
-        int valueCompare;
-        for (K key: m1.keySet()) {
-            valueCompare = m1.get(key).compareTo(m2.get(key));
-            if (valueCompare != 0) {
-                return valueCompare;
+        for (Map.Entry<K, V> entry : m1.entrySet()) {
+            V thisValue = entry.getValue();
+            V otherValue = m2.get(entry.getKey());
+            if (thisValue == null) {
+                if (otherValue != null) {
+                    return 1;
+                } else {
+                    continue;
+                }
+            }
+            if (!thisValue.equals(otherValue)) {
+                if (otherValue == null) {
+                    return -1;
+                }
+                if (!thisValue.getClass().equals(otherValue.getClass())) {
+                    DataType leftType = DataTypes.guessType(thisValue);
+                    int cmp = leftType.compareValueTo(leftType.value(thisValue), leftType.value(otherValue));
+                    if (cmp == 0) {
+                        continue;
+                    }
+                    return cmp;
+                }
+                return 1;
             }
         }
         return 0;

@@ -21,32 +21,18 @@
 
 package io.crate.exceptions;
 
-public class ColumnUnknownException extends ResourceUnknownException {
-    private final String tableName;
-    private final String columnName;
+import io.crate.metadata.RelationName;
 
-    public ColumnUnknownException(String columnName) {
-        super(String.format("Column '%s' unknown", columnName));
-        this.tableName = null;
-        this.columnName = columnName;
-    }
+import java.util.Collections;
+import java.util.Locale;
 
-    public ColumnUnknownException(String columnName, Throwable e) {
-        super(String.format("Column '%s' unknown", columnName), e);
-        this.tableName = null;
-        this.columnName = columnName;
-    }
+public class ColumnUnknownException extends ResourceUnknownException implements TableScopeException {
 
-    public ColumnUnknownException(String tableName, String columnName) {
-        super(String.format("Column '%s' unknown", columnName));
-        this.tableName = tableName;
-        this.columnName = columnName;
-    }
+    private final RelationName relationName;
 
-    public ColumnUnknownException(String tableName, String columnName, Throwable e) {
-        super(String.format("Column '%s' unknown", columnName), e);
-        this.tableName = tableName;
-        this.columnName = columnName;
+    public ColumnUnknownException(String columnName, RelationName relationName) {
+        super(String.format(Locale.ENGLISH, "Column %s unknown", columnName));
+        this.relationName = relationName;
     }
 
     @Override
@@ -55,7 +41,7 @@ public class ColumnUnknownException extends ResourceUnknownException {
     }
 
     @Override
-    public Object[] args() {
-        return new Object[]{tableName, columnName};
+    public Iterable<RelationName> getTableIdents() {
+        return Collections.singletonList(relationName);
     }
 }

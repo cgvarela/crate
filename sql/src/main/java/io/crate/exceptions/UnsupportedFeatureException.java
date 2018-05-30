@@ -21,11 +21,7 @@
 
 package io.crate.exceptions;
 
-public class UnsupportedFeatureException extends ValidationException {
-
-    public UnsupportedFeatureException(Throwable e) {
-        super(e);
-    }
+public class UnsupportedFeatureException extends ValidationException implements ClusterScopeException {
 
     public UnsupportedFeatureException(String msg) {
         super(msg);
@@ -38,10 +34,5 @@ public class UnsupportedFeatureException extends ValidationException {
     @Override
     public int errorCode() {
         return 4;
-    }
-
-    @Override
-    public Object[] args() {
-        return new Object[0];
     }
 }

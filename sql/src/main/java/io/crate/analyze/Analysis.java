@@ -6,7 +6,7 @@
  * you may not use this file except in compliance with the License.  You may
  * obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
@@ -21,64 +21,54 @@
 
 package io.crate.analyze;
 
-import com.google.common.collect.ImmutableList;
-import io.crate.metadata.TableIdent;
-import io.crate.metadata.table.SchemaInfo;
-import io.crate.metadata.table.TableInfo;
+import io.crate.action.sql.SessionContext;
+import io.crate.analyze.relations.AnalyzedRelation;
+import io.crate.metadata.TransactionContext;
 
-import java.util.List;
+public class Analysis {
 
-public abstract class Analysis {
+    private final ParameterContext parameterContext;
+    private final TransactionContext transactionContext;
 
-    private final Analyzer.ParameterContext parameterContext;
-    private List<String> outputNames = ImmutableList.of();
+    private final ParamTypeHints paramTypeHints;
+    private AnalyzedStatement analyzedStatement;
+    private AnalyzedRelation rootRelation;
 
-    protected String tableAlias;
-
-    public void tableAlias(String tableAlias) {
-        this.tableAlias = tableAlias;
-    }
-
-    public String tableAlias() {
-        return tableAlias;
-    }
-
-    protected Analysis(Analyzer.ParameterContext parameterContext) {
+    public Analysis(TransactionContext transactionContext, ParameterContext parameterContext, ParamTypeHints paramTypeHints) {
+        this.paramTypeHints = paramTypeHints;
+        this.transactionContext = transactionContext;
         this.parameterContext = parameterContext;
     }
 
-    public abstract void table(TableIdent tableIdent);
-
-    public abstract TableInfo table();
-
-    public abstract SchemaInfo schema();
-
-    public abstract boolean hasNoResult();
-
-    public abstract void normalize();
-
-    public void outputNames(List<String> outputNames) {
-        this.outputNames = outputNames;
+    public void analyzedStatement(AnalyzedStatement analyzedStatement) {
+        this.analyzedStatement = analyzedStatement;
     }
 
-    public List<String> outputNames() {
-        return outputNames;
+    public AnalyzedStatement analyzedStatement() {
+        return analyzedStatement;
     }
 
-    public Analyzer.ParameterContext parameterContext() {
+    public ParameterContext parameterContext() {
         return parameterContext;
     }
 
-    public Object[] parameters() {
-        return parameterContext.parameters();
+    public void rootRelation(AnalyzedRelation rootRelation) {
+        this.rootRelation = rootRelation;
     }
 
-    public <C, R> R accept(AnalysisVisitor<C,R> analysisVisitor, C context) {
-        return analysisVisitor.visitAnalysis(this, context);
+    public AnalyzedRelation rootRelation() {
+        return rootRelation;
     }
 
-    public boolean isData() {
-        return true;
+    public TransactionContext transactionContext() {
+        return transactionContext;
     }
 
+    public SessionContext sessionContext() {
+        return transactionContext.sessionContext();
+    }
+
+    public ParamTypeHints paramTypeHints() {
+        return paramTypeHints;
+    }
 }

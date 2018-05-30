@@ -22,41 +22,41 @@
 package io.crate.metadata;
 
 import com.google.common.collect.ImmutableList;
-import io.crate.operation.reference.partitioned.PartitionExpression;
+import io.crate.expression.reference.partitioned.PartitionExpression;
+import io.crate.test.integration.CrateUnitTest;
+import io.crate.testing.TestingHelpers;
+import io.crate.types.DataTypes;
 import org.junit.Test;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.core.Is.is;
-import static org.junit.Assert.fail;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.hamcrest.Matchers.containsString;
 
-public class PartitionReferenceResolverTest {
+public class PartitionReferenceResolverTest extends CrateUnitTest {
 
     @Test
     public void testClusterExpressionsNotAllowed() throws Exception {
-        ReferenceResolver fallbackRefResolver = mock(ReferenceResolver.class);
-        ReferenceIdent ident = new ReferenceIdent(new TableIdent("doc", "foo"), "bar");
-        when(fallbackRefResolver.getImplementation(ident)).thenReturn(new ReferenceImplementation() {
-            @Override
-            public ReferenceInfo info() {
-                return null;
-            }
-
-            @Override
-            public ReferenceImplementation getChildImplementation(String name) {
-                return null;
-            }
-        });
+        Reference refInfo = TestingHelpers.refInfo("foo.bar", DataTypes.STRING, RowGranularity.CLUSTER);
         PartitionReferenceResolver referenceResolver = new PartitionReferenceResolver(
-                fallbackRefResolver,
-                ImmutableList.<PartitionExpression>of()
-        );
-        try {
-            referenceResolver.getImplementation(ident);
-            fail();
-        } catch (AssertionError e) {
-            assertThat(e.getMessage(), is("granularity < PARTITION should have been resolved already"));
+            ImmutableList.<PartitionExpression>of());
+
+        if (assertionsEnabled()) {
+            try {
+                referenceResolver.getImplementation(refInfo);
+                fail("no assertion error thrown");
+            } catch (AssertionError e) {
+                assertThat(e.getMessage(), containsString("granularity < PARTITION should have been resolved already"));
+            }
+        } else {
+            referenceResolver.getImplementation(refInfo);
         }
+
+
     }
+
+    public static boolean assertionsEnabled() {
+        boolean assertsEnabled = false;
+        assert assertsEnabled = true; // Intentional side effect!!!
+        return assertsEnabled;
+    }
+
+
 }

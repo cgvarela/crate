@@ -21,42 +21,33 @@
 
 package io.crate.integrationtests;
 
-import io.crate.action.sql.SQLResponse;
-import io.crate.test.integration.ClassLifecycleIntegrationTest;
-import io.crate.testing.SQLTransportExecutor;
-import org.junit.Before;
+import io.crate.testing.SQLResponse;
+import org.junit.After;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
+public class SysJobsTest extends SQLTransportIntegrationTest {
 
-public class SysJobsTest extends ClassLifecycleIntegrationTest {
-
-    private SQLTransportExecutor e;
-
-    @Before
-    public void before() throws Exception {
-        e = SQLTransportExecutor.create(ClassLifecycleIntegrationTest.GLOBAL_CLUSTER);
+    @After
+    public void resetStatsEnabled() throws Exception {
+        execute("reset global stats.enabled");
     }
 
     @Test
     public void testQueryAllColumns() throws Exception {
-        e.exec("set global stats.enabled = true");
         String stmt = "select * from sys.jobs";
 
         // the response contains all current jobs, if the tests are executed in parallel
         // this might be more then only the "select * from sys.jobs" statement.
-        SQLResponse response = e.exec(stmt);
+        SQLResponse response = execute(stmt);
         List<String> statements = new ArrayList<>();
 
         for (Object[] objects : response.rows()) {
             assertNotNull(objects[0]);
-            statements.add((String)objects[1]);
+            statements.add((String) objects[3]);
         }
         assertTrue(statements.contains(stmt));
-        e.exec("set global stats.enabled = false");
     }
 }

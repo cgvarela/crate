@@ -22,21 +22,19 @@
 package io.crate.action.sql.parser;
 
 
+import io.crate.test.integration.CrateUnitTest;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.junit.Test;
 
-import static junit.framework.Assert.assertEquals;
-import static org.junit.Assert.assertArrayEquals;
-
-public class SQLBulkArgsParseElementTest {
+public class SQLBulkArgsParseElementTest extends CrateUnitTest {
 
     private Object[][] parse(String bulk_args) throws Exception {
-        SQLXContentSourceContext context = new SQLXContentSourceContext();
+        SQLRequestParseContext context = new SQLRequestParseContext();
         String json = "{\"bulk_args\":" + bulk_args + "}";
         BytesArray bytes = new BytesArray(json);
-        XContentParser parser = XContentFactory.xContent(bytes).createParser(bytes);
+        XContentParser parser = XContentFactory.xContent(bytes).createParser(xContentRegistry(), bytes);
         parser.nextToken();
         parser.nextToken();
         parser.nextToken();
@@ -51,7 +49,7 @@ public class SQLBulkArgsParseElementTest {
         String bulk_args = "[[\"200\", \"Somewhere\", \"planet\"], [\"201\", \"Somewhere else\", \"city\"]]";
         Object[][] bulk_array = parse(bulk_args);
         assertArrayEquals(new Object[]{new Object[]{"200", "Somewhere", "planet"},
-                                       new Object[]{"201", "Somewhere else", "city"}}, bulk_array);
+            new Object[]{"201", "Somewhere else", "city"}}, bulk_array);
     }
 
     @Test

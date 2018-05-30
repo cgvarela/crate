@@ -24,53 +24,74 @@ package io.crate.metadata.information;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.crate.metadata.ColumnIdent;
-import io.crate.metadata.ReferenceIdent;
-import io.crate.metadata.ReferenceInfo;
-import io.crate.metadata.TableIdent;
-import io.crate.planner.RowGranularity;
-import io.crate.types.ArrayType;
-import io.crate.types.DataType;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.RowContextCollectorExpression;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.expressions.RowCollectExpressionFactory;
+import io.crate.metadata.table.ColumnRegistrar;
+import io.crate.metadata.table.ConstraintInfo;
 import io.crate.types.DataTypes;
+
+import java.util.Map;
 
 public class InformationTableConstraintsTableInfo extends InformationTableInfo {
 
     public static final String NAME = "table_constraints";
-    public static final TableIdent IDENT = new TableIdent(InformationSchemaInfo.NAME, NAME);
+    public static final RelationName IDENT = new RelationName(InformationSchemaInfo.NAME, NAME);
 
     public static class Columns {
-        public static final ColumnIdent SCHEMA_NAME = new ColumnIdent("schema_name");
-        public static final ColumnIdent TABLE_NAME = new ColumnIdent("table_name");
-        public static final ColumnIdent CONSTRAINT_NAME = new ColumnIdent("constraint_name");
-        public static final ColumnIdent CONSTRAINT_TYPE = new ColumnIdent("constraint_type");
+        static final ColumnIdent CONSTRAINT_CATALOG = new ColumnIdent("constraint_catalog");
+        static final ColumnIdent CONSTRAINT_SCHEMA = new ColumnIdent("constraint_schema");
+        static final ColumnIdent CONSTRAINT_NAME = new ColumnIdent("constraint_name");
+        static final ColumnIdent TABLE_CATALOG = new ColumnIdent("table_catalog");
+        static final ColumnIdent TABLE_SCHEMA = new ColumnIdent("table_schema");
+        static final ColumnIdent TABLE_NAME = new ColumnIdent("table_name");
+        static final ColumnIdent CONSTRAINT_TYPE = new ColumnIdent("constraint_type");
+        static final ColumnIdent IS_DEFERRABLE = new ColumnIdent("is_deferrable");
+        static final ColumnIdent INITIALLY_DEFERRED = new ColumnIdent("initially_deferred");
     }
 
-    public static class ReferenceInfos {
-        public static final ReferenceInfo SCHEMA_NAME = info(Columns.SCHEMA_NAME, DataTypes.STRING);
-        public static final ReferenceInfo TABLE_NAME = info(Columns.TABLE_NAME, DataTypes.STRING);
-        public static final ReferenceInfo CONSTRAINT_NAME = info(Columns.CONSTRAINT_NAME, new ArrayType(DataTypes.STRING));
-        public static final ReferenceInfo CONSTRAINT_TYPE = info(Columns.CONSTRAINT_TYPE, DataTypes.STRING);
+    private static ColumnRegistrar columnRegistrar() {
+        return new ColumnRegistrar(IDENT, RowGranularity.DOC)
+            .register(Columns.CONSTRAINT_CATALOG, DataTypes.STRING)
+            .register(Columns.CONSTRAINT_SCHEMA, DataTypes.STRING)
+            .register(Columns.CONSTRAINT_NAME, DataTypes.STRING)
+            .register(Columns.TABLE_CATALOG, DataTypes.STRING)
+            .register(Columns.TABLE_SCHEMA, DataTypes.STRING)
+            .register(Columns.TABLE_NAME, DataTypes.STRING)
+            .register(Columns.CONSTRAINT_TYPE, DataTypes.STRING)
+            .register(Columns.IS_DEFERRABLE, DataTypes.STRING)
+            .register(Columns.INITIALLY_DEFERRED, DataTypes.STRING);
     }
 
-    private static ReferenceInfo info(ColumnIdent columnIdent, DataType dataType) {
-        return new ReferenceInfo(new ReferenceIdent(IDENT, columnIdent), RowGranularity.DOC, dataType);
+    public static Map<ColumnIdent, RowCollectExpressionFactory<ConstraintInfo>> expressions() {
+        return ImmutableMap.<ColumnIdent, RowCollectExpressionFactory<ConstraintInfo>>builder()
+            .put(Columns.CONSTRAINT_CATALOG,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.tableIdent().schema()))
+            .put(Columns.CONSTRAINT_SCHEMA,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.tableIdent().schema()))
+            .put(Columns.CONSTRAINT_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(ConstraintInfo::constraintName))
+            .put(Columns.TABLE_CATALOG,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.tableIdent().schema()))
+            .put(Columns.TABLE_SCHEMA,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.tableIdent().schema()))
+            .put(Columns.TABLE_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.tableIdent().name()))
+            .put(Columns.CONSTRAINT_TYPE,
+                () -> RowContextCollectorExpression.objToBytesRef(ConstraintInfo::constraintType))
+            .put(Columns.IS_DEFERRABLE,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> "NO"))
+            .put(Columns.INITIALLY_DEFERRED,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> "NO"))
+            .build();
     }
 
-    protected InformationTableConstraintsTableInfo(InformationSchemaInfo schemaInfo) {
-        super(schemaInfo,
-                IDENT,
-                ImmutableList.<ColumnIdent>of(),
-                ImmutableMap.<ColumnIdent, ReferenceInfo>builder()
-                        .put(Columns.SCHEMA_NAME, ReferenceInfos.SCHEMA_NAME)
-                        .put(Columns.TABLE_NAME, ReferenceInfos.TABLE_NAME)
-                        .put(Columns.CONSTRAINT_NAME, ReferenceInfos.CONSTRAINT_NAME)
-                        .put(Columns.CONSTRAINT_TYPE, ReferenceInfos.CONSTRAINT_TYPE)
-                        .build(),
-                ImmutableList.<ReferenceInfo>builder()
-                        .add(ReferenceInfos.SCHEMA_NAME)
-                        .add(ReferenceInfos.TABLE_NAME)
-                        .add(ReferenceInfos.CONSTRAINT_NAME)
-                        .add(ReferenceInfos.CONSTRAINT_TYPE)
-                        .build()
+    InformationTableConstraintsTableInfo() {
+        super(
+            IDENT,
+            columnRegistrar(),
+            ImmutableList.of(Columns.CONSTRAINT_CATALOG, Columns.CONSTRAINT_SCHEMA, Columns.CONSTRAINT_NAME)
         );
     }
 }

@@ -24,23 +24,24 @@ package io.crate.action.sql.parser;
 import org.elasticsearch.common.xcontent.XContentParser;
 
 /**
- * used to parse the "stmt" element that is expected to be in requests parsed by the {@link io.crate.action.sql.parser
- * .SQLXContentSourceParser}
- * <p/>
- * Fills the stmt in the {@link io.crate.action.sql.parser.SQLXContentSourceContext}.
+ * used to parse the "stmt" element that is expected to be in requests
+ * parsed by the io.crate.action.sql.parser.SQLRequestParser
+ * <p>
+ * Fills the stmt in the io.crate.action.sql.parser.SQLRequestParseContext.
+ * </p>
  */
-public class SQLStmtParseElement implements SQLParseElement {
+class SQLStmtParseElement implements SQLParseElement {
 
     @Override
-    public void parse(XContentParser parser, SQLXContentSourceContext context) throws Exception {
+    public void parse(XContentParser parser, SQLRequestParseContext context) throws Exception {
         XContentParser.Token token = parser.currentToken();
 
         if (!token.isValue()) {
-            throw new SQLParseSourceException(context, "Field [" + parser.currentName() + "] has an invalid value");
+            throw new SQLParseSourceException("Field [" + parser.currentName() + "] has an invalid value");
         }
         String stmt = parser.text();
         if (stmt == null || stmt.length() == 0) {
-            throw new SQLParseSourceException(context, "Field [" + parser.currentName() + "] has no value");
+            throw new SQLParseSourceException("Field [" + parser.currentName() + "] has no value");
         }
         context.stmt(parser.text());
     }

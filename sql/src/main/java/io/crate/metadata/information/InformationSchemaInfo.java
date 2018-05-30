@@ -22,27 +22,38 @@
 package io.crate.metadata.information;
 
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSortedMap;
 import io.crate.metadata.table.SchemaInfo;
 import io.crate.metadata.table.TableInfo;
+import io.crate.metadata.view.ViewInfo;
+import org.elasticsearch.cluster.ClusterChangedEvent;
+import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.inject.Singleton;
 
-import java.util.Iterator;
+import java.util.Collections;
 
 @Singleton
 public class InformationSchemaInfo implements SchemaInfo {
 
     public static final String NAME = "information_schema";
 
-    public final ImmutableMap<String, InformationTableInfo> tableInfoMap;
+    private final ImmutableMap<String, TableInfo> tableInfoMap;
 
+    @Inject
     public InformationSchemaInfo() {
-        this.tableInfoMap = ImmutableMap.<String, InformationTableInfo>builder()
-                .put(InformationTablesTableInfo.NAME, new InformationTablesTableInfo(this))
-                .put(InformationColumnsTableInfo.NAME, new InformationColumnsTableInfo(this))
-                .put(InformationPartitionsTableInfo.NAME, new InformationPartitionsTableInfo(this))
-                .put(InformationTableConstraintsTableInfo.NAME, new InformationTableConstraintsTableInfo(this))
-                .put(InformationRoutinesTableInfo.NAME, new InformationRoutinesTableInfo(this))
-        .build();
+        tableInfoMap = ImmutableSortedMap.<String, TableInfo>naturalOrder()
+            .put(InformationTablesTableInfo.NAME, new InformationTablesTableInfo())
+            .put(InformationViewsTableInfo.NAME, new InformationViewsTableInfo())
+            .put(InformationColumnsTableInfo.NAME, new InformationColumnsTableInfo())
+            .put(InformationKeyColumnUsageTableInfo.NAME, new InformationKeyColumnUsageTableInfo())
+            .put(InformationPartitionsTableInfo.NAME, new InformationPartitionsTableInfo())
+            .put(InformationTableConstraintsTableInfo.NAME, new InformationTableConstraintsTableInfo())
+            .put(InformationReferentialConstraintsTableInfo.NAME, new InformationReferentialConstraintsTableInfo())
+            .put(InformationRoutinesTableInfo.NAME, new InformationRoutinesTableInfo())
+            .put(InformationSchemataTableInfo.NAME, new InformationSchemataTableInfo())
+            .put(InformationSqlFeaturesTableInfo.NAME, new InformationSqlFeaturesTableInfo())
+            .put(InformationSchemaIngestionRulesTableInfo.NAME, new InformationSchemaIngestionRulesTableInfo())
+            .build();
     }
 
     @Override
@@ -56,12 +67,26 @@ public class InformationSchemaInfo implements SchemaInfo {
     }
 
     @Override
-    public boolean systemSchema() {
-        return true;
+    public void invalidateTableCache(String tableName) {
     }
 
     @Override
-    public Iterator<? extends TableInfo> iterator() {
-        return tableInfoMap.values().iterator();
+    public Iterable<TableInfo> getTables() {
+        return tableInfoMap.values();
+    }
+
+    @Override
+    public Iterable<ViewInfo> getViews() {
+        return Collections.emptyList();
+    }
+
+    @Override
+    public void close() throws Exception {
+
+    }
+
+    @Override
+    public void update(ClusterChangedEvent event) {
+
     }
 }

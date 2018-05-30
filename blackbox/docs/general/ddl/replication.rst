@@ -1,0 +1,48 @@
+.. _replication:
+
+===========
+Replication
+===========
+
+Replication of a table in CrateDB means that each primary shard of a table is
+stored additionally on so called secondary shards. This might be useful for
+better read performance and high availability. If not specified, CrateDB
+creates zero to one replica depending on the number of available nodes at the
+cluster. At a single-node cluster, replicas are set to zero to allow fast write
+operations with the default setting of
+:ref:`sql_ref_write_wait_for_active_shards`.
+
+Defining the number of replicas is done using the ``number_of_replicas``
+property.
+
+Example::
+
+    cr> create table my_table10 (
+    ...   first_column int,
+    ...   second_column string
+    ... ) with (number_of_replicas = 0);
+    CREATE OK, 1 row affected (... sec)
+
+The ``number_of_replicas`` property also accepts an string as parameter that
+contains a ``range``.
+
+A range is a definition of minimum number of replicas to maximum number of
+replicas depending on the number of nodes in the cluster. The table below shows
+some examples.
+
+===== =========================================================================
+Range Explanation
+===== =========================================================================
+0-1   Will create 0 or 1 replicas depending on the number of available nodes
+----- -------------------------------------------------------------------------
+2-4   Table requires at least 2 replicas to be fully replicated. Will create up
+      to 4 if nodes are added.
+----- -------------------------------------------------------------------------
+0-all Will expand the number of replicas to the available number of nodes.
+===== =========================================================================
+
+For details of the range syntax refer to :ref:`number_of_replicas`.
+
+.. NOTE::
+
+  The number of replicas can be changed at any time.

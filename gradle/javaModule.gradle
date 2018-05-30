@@ -1,0 +1,136 @@
+apply plugin: 'java'
+apply plugin: 'maven'
+apply plugin: 'de.thetaphi.forbiddenapis'
+apply plugin: 'com.github.johnrengelman.shadow'
+apply plugin: 'pmd'
+apply plugin: 'checkstyle'
+
+repositories {
+    mavenCentral()
+    jcenter()
+    maven { url "https://jitpack.io" }
+}
+
+compileJava {
+    options.warnings = false
+    options.deprecation = false
+    options.compilerArgs << '-XDignore.symbol.file'
+    options.fork = true
+    options.forkOptions.executable = 'javac'
+
+    finalizedBy checkstyleMain
+}
+
+
+javadoc {
+    options.addStringOption('XDignore.symbol.file', '')
+}
+
+
+sourceCompatibility = "8"
+targetCompatibility = "8"
+
+if (project.hasProperty('testLogging')) {
+    // Used to enable logging for tests
+    test {
+        testLogging.showStandardStreams = true
+    }
+}
+
+
+if (project.hasProperty('lint-unchecked')) {
+    compileJava.options.compilerArgs = compileJava.options.compilerArgs << '-Xlint:unchecked'
+    compileTestJava.options.compilerArgs = compileTestJava.options.compilerArgs << '-Xlint:unchecked'
+}
+
+if (project.hasProperty('lint-deprecation')) {
+    compileJava.options.compilerArgs = compileJava.options.compilerArgs << '-Xlint:deprecation'
+    compileTestJava.options.compilerArgs = compileTestJava.options.compilerArgs << '-Xlint:deprecation'
+}
+
+forbiddenApisMain {
+    bundledSignatures = ['jdk-unsafe', 'jdk-deprecated']
+    signaturesFiles = files("$rootDir/gradle/forbidden-signatures.txt")
+    suppressAnnotations = ['**.SuppressForbidden']
+    ignoreFailures = false
+}
+
+pmd {
+    consoleOutput = true
+    if (project.hasProperty('pmdFull')) {
+        ignoreFailures = true
+        consoleOutput = false
+        ruleSets = [
+            'java-basic',
+            'java-braces',
+            'java-clone',
+            'java-codesize',
+            'java-controversial',
+            'java-design',
+            'java-empty',
+            'java-finalizers',
+            'java-imports',
+            'java-logging-jakarta-commons',
+            'java-logging-java',
+            'java-naming',
+            'java-optimizations',
+            'java-strictexception',
+            'java-strings',
+            'java-sunsecure',
+            'java-typeresolution',
+            'java-unnecessary',
+            'java-unusedcode'
+        ]
+    } else {
+        ignoreFailures = false
+        consoleOutput = true
+        ruleSetFiles = files("$rootDir/gradle/pmd/customrulesset.xml")
+        ruleSets = []
+    }
+}
+// Required if ignoreFailures = true
+[pmdMain,pmdTest]*.ignoreFailures = project.pmd.ignoreFailures
+
+tasks.withType(Pmd) {
+    pmdClasspath += files("$rootDir/gradle/pmd")
+}
+
+checkstyle {
+    toolVersion = "8.10"
+    def checkstyle_dir = new String("$rootDir/gradle/checkstyle/")
+    configProperties = [
+            'checkstyleDir' : checkstyle_dir,
+            // May be overwritten by other modules, e.g. enterprise
+            'licenseHeaderFile' : 'header.txt'
+    ]
+    configFile = file(checkstyle_dir + "rules.xml")
+    checkstyleTest.enabled = false
+}
+
+test {
+    // by default `-D` arguments are "caught" in the gradle process
+    // and not passed-through to the test process.
+    // this enables test options like '-Dtests.iters=20'
+
+    System.properties.each { k, v ->
+        if (k.startsWith('tests.')) {
+            systemProperty k, v
+        }
+    }
+
+    jacoco {
+        enabled = true;
+    }
+
+    // ES testing framework adds the resources target build paths to the classpath of the tests,
+    // but if the src/[main|test]/resources directories of a project are empty, then these dirs
+    // are missing from the target build directory which causes all tests to fail.
+    // The groovy target build paths have the same problem.
+    // To prevent this case we always create the target build resource and groovy directories upfront.
+    doFirst {
+        file(project.buildDir.path + '/resources/main').mkdirs()
+        file(project.buildDir.path + '/resources/test').mkdirs()
+        file(project.buildDir.path + '/classes/groovy/main').mkdirs()
+        file(project.buildDir.path + '/classes/groovy/test').mkdirs()
+    }
+}

@@ -34,16 +34,16 @@ public class MatchPredicate extends Expression {
     private final GenericProperties properties;
     private final String matchType;
 
-    public MatchPredicate(List<MatchPredicateColumnIdent> idents, Expression value,
-                          @Nullable String matchType, @Nullable GenericProperties properties) {
+    public MatchPredicate(List<MatchPredicateColumnIdent> idents,
+                          Expression value,
+                          @Nullable String matchType,
+                          GenericProperties properties) {
         Preconditions.checkArgument(idents.size() > 0, "at least one ident must be given");
         Preconditions.checkNotNull(value, "query_term is null");
-        Preconditions.checkArgument(value instanceof StringLiteral || value instanceof ParameterExpression, "query_term is not a string nor a parameter");
-
         this.idents = idents;
         this.value = value;
         this.matchType = matchType;
-        this.properties = Objects.firstNonNull(properties, GenericProperties.EMPTY);
+        this.properties = properties;
     }
 
     public List<MatchPredicateColumnIdent> idents() {
@@ -93,8 +93,7 @@ public class MatchPredicate extends Expression {
 
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitMatchPredicate(this, context);
     }
 

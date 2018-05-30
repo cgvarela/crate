@@ -28,16 +28,22 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 
-public class FloatType extends DataType<Float> implements Streamer<Float>, DataTypeFactory{
+public class FloatType extends DataType<Float> implements Streamer<Float>, FixedWidthType {
 
     public static final FloatType INSTANCE = new FloatType();
     public static final int ID = 7;
 
-    private FloatType() {}
+    private FloatType() {
+    }
 
     @Override
     public int id() {
         return ID;
+    }
+
+    @Override
+    public Precedence precedence() {
+        return Precedence.FloatType;
     }
 
     @Override
@@ -55,27 +61,25 @@ public class FloatType extends DataType<Float> implements Streamer<Float>, DataT
         if (value == null) {
             return null;
         }
+        if (value instanceof Float) {
+            return (Float) value;
+        }
         if (value instanceof String) {
-            return Float.parseFloat((String)value);
+            return Float.parseFloat((String) value);
         }
         if (value instanceof BytesRef) {
-            return Float.parseFloat(((BytesRef)value).utf8ToString());
+            return Float.parseFloat(((BytesRef) value).utf8ToString());
         }
-        double doubleValue = ((Number)value).doubleValue();
+        double doubleValue = ((Number) value).doubleValue();
         if (doubleValue < -Float.MAX_VALUE || Float.MAX_VALUE < doubleValue) {
             throw new IllegalArgumentException("float value out of range: " + doubleValue);
         }
-        return ((Number)value).floatValue();
+        return ((Number) value).floatValue();
     }
 
     @Override
     public int compareValueTo(Float val1, Float val2) {
-        return Float.compare(val1, val2);
-    }
-
-    @Override
-    public DataType<?> create() {
-        return INSTANCE;
+        return nullSafeCompareValueTo(val1, val2, Float::compare);
     }
 
     @Override
@@ -89,5 +93,10 @@ public class FloatType extends DataType<Float> implements Streamer<Float>, DataT
         if (v != null) {
             out.writeFloat(((Number) v).floatValue());
         }
+    }
+
+    @Override
+    public int fixedSize() {
+        return 16; // object overhead + float
     }
 }

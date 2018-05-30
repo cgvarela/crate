@@ -24,18 +24,39 @@ package io.crate.metadata.settings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeValue;
 
-public abstract class ByteSizeSetting extends Setting<ByteSizeValue, String> {
+public class ByteSizeSetting extends Setting<ByteSizeValue, String> {
 
-    public long maxValue() {
+    private final String name;
+    private final ByteSizeValue defaultValue;
+
+    public ByteSizeSetting(String name, ByteSizeValue defaultValue) {
+        this.name = name;
+        this.defaultValue = defaultValue;
+    }
+
+    long maxValue() {
         return Long.MAX_VALUE;
     }
 
-    public long minValue() {
+    long minValue() {
         return Long.MIN_VALUE;
     }
 
     @Override
-    public String extract(Settings settings) {
-        return settings.getAsBytesSize(settingName(), defaultValue()).toString();
+    public String name() {
+        return name;
+    }
+
+    @Override
+    public ByteSizeValue defaultValue() {
+        return defaultValue;
+    }
+
+    public long extractBytes(Settings settings) {
+        return extractByteSizeValue(settings).getBytes();
+    }
+
+    private ByteSizeValue extractByteSizeValue(Settings settings) {
+        return settings.getAsBytesSize(name, defaultValue());
     }
 }

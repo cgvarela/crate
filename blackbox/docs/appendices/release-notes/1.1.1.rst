@@ -1,0 +1,83 @@
+.. _version_1.1.1:
+
+=============
+Version 1.1.1
+=============
+
+Released on 2017/03/27.
+
+.. NOTE::
+
+   If you are upgrading a cluster, you must be running CrateDB 0.57.0 or higher
+   before you upgrade to 1.1.1.
+
+   You cannot perform a `rolling upgrade`_ to this version. Any upgrade to this
+   version will require a `full restart upgrade`_ and will introduce all of the
+   breaking changes listed for :ref:`version_1.1.0`.
+
+.. WARNING::
+
+   Before upgrading, you should `back up your data`_.
+
+.. _rolling upgrade: http://crate.io/docs/crate/guide/best_practices/rolling_upgrade.html
+.. _full restart upgrade: http://crate.io/docs/crate/guide/best_practices/full_restart_upgrade.html
+.. _back up your data: https://crate.io/a/backing-up-and-restoring-crate/
+
+.. rubric:: Table of Contents
+
+.. contents::
+   :local:
+
+Changelog
+=========
+
+Changes
+-------
+
+ - Querying the admin UI from ``/_plugin/crate-admin/`` will now redirect to
+   ``/``.
+
+ - Added possible data type conversion to a timestamp array. e.g.
+   ``cast(['2017-01-01','2017-12-31'] as array(timestamp))``
+
+ - Improved error handling when using ``LIMIT``/``OFFSET`` that exceed Integer
+   range.
+
+ - Removed blog feed from side bar of the settings interface.
+
+ - Increased base font size in the admin interface.
+
+ - Added fallback to unformatted results in the console interface if no column
+   types are returned.
+
+ - Display notification warning only when a new CrateDB version is released.
+
+ - Added ``lineWrapping`` option to console editor in the admin UI.
+
+
+Fixes
+-----
+
+ - Fixed a regression introduced in 1.1.1 which could cause queries to return
+   wrong values.
+
+ - Fixed bug introduced in 1.1.0 which caused all partitioned tables to become
+   unusable.
+
+ - Fixed an issue that caused conditions like ``not x = any( )`` to not find
+   empty lists when used in ``WHERE`` clauses.
+
+ - Fixed a regression introduced in 1.1.0 that caused statements like ``COPY TO
+   '/invalid/directory/'`` to get stuck instead of resulting in an error.
+
+ - Fixed an issue where arrays in formatted objects were not displayed in the
+   console interface.
+
+ - Fixed an issue that caused tables interface to display a healthy status even
+   though the partitions were in critical state.
+
+ - Fixed an issue that caused the console text to appear on top of the settings
+   tab.
+
+ - Fixed load reading display when the readings were invalid (for example, on
+   Windows).

@@ -21,10 +21,7 @@
 
 package io.crate.exceptions;
 
-public class ResourceUnknownException extends RuntimeException implements CrateException {
-
-    public ResourceUnknownException() {
-    }
+public abstract class ResourceUnknownException extends RuntimeException implements CrateException {
 
     public ResourceUnknownException(String s) {
         super(s);
@@ -34,17 +31,8 @@ public class ResourceUnknownException extends RuntimeException implements CrateE
         super(message, cause);
     }
 
-    public ResourceUnknownException(Throwable cause) {
-        super(cause);
-    }
-
     @Override
     public int errorCode() {
         return 0;
-    }
-
-    @Override
-    public Object[] args() {
-        return new Object[0];
     }
 }

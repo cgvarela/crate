@@ -28,16 +28,22 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 
-public class DoubleType extends DataType<Double> implements Streamer<Double>, DataTypeFactory {
+public class DoubleType extends DataType<Double> implements FixedWidthType, Streamer<Double> {
 
     public static final DoubleType INSTANCE = new DoubleType();
     public static final int ID = 6;
 
-    private DoubleType() {}
+    private DoubleType() {
+    }
 
     @Override
     public int id() {
         return ID;
+    }
+
+    @Override
+    public Precedence precedence() {
+        return Precedence.DoubleType;
     }
 
     @Override
@@ -55,21 +61,21 @@ public class DoubleType extends DataType<Double> implements Streamer<Double>, Da
         if (value == null) {
             return null;
         }
-        if (value instanceof String) {
-            return Double.valueOf((String)value);
-        }
-        if (value instanceof BytesRef) {
-            return Double.valueOf(((BytesRef)value).utf8ToString());
-        }
         if (value instanceof Double) {
             return (Double) value;
         }
-        return ((Number)value).doubleValue();
+        if (value instanceof String) {
+            return Double.valueOf((String) value);
+        }
+        if (value instanceof BytesRef) {
+            return Double.valueOf(((BytesRef) value).utf8ToString());
+        }
+        return ((Number) value).doubleValue();
     }
 
     @Override
     public int compareValueTo(Double val1, Double val2) {
-        return Double.compare(val1, val2);
+        return nullSafeCompareValueTo(val1, val2, Double::compare);
     }
 
     @Override
@@ -86,7 +92,7 @@ public class DoubleType extends DataType<Double> implements Streamer<Double>, Da
     }
 
     @Override
-    public DataType<?> create() {
-        return INSTANCE;
+    public int fixedSize() {
+        return 16; // 8 object overhead + 8 for double
     }
 }

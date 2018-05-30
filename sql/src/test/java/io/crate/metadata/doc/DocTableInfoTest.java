@@ -2,49 +2,67 @@ package io.crate.metadata.doc;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import io.crate.PartitionName;
-import io.crate.exceptions.ColumnUnknownException;
-import io.crate.metadata.*;
-import io.crate.planner.RowGranularity;
-import io.crate.planner.symbol.DynamicReference;
+import io.crate.Version;
+import io.crate.expression.symbol.DynamicReference;
+import io.crate.metadata.ColumnIdent;
+import io.crate.metadata.Reference;
+import io.crate.metadata.ReferenceIdent;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.Schemas;
+import io.crate.metadata.table.ColumnPolicy;
+import io.crate.metadata.table.Operation;
+import io.crate.test.integration.CrateUnitTest;
 import io.crate.types.DataTypes;
 import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
+import org.elasticsearch.common.settings.Settings;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
 
-import static org.junit.Assert.*;
-import static org.mockito.Mockito.mock;
-
-public class DocTableInfoTest {
+public class DocTableInfoTest extends CrateUnitTest {
 
     @Test
     public void testGetColumnInfo() throws Exception {
-        TableIdent tableIdent = new TableIdent(null, "dummy");
+        RelationName relationName = new RelationName(Schemas.DOC_SCHEMA_NAME, "dummy");
 
         DocTableInfo info = new DocTableInfo(
-                mock(DocSchemaInfo.class),
-                tableIdent,
-                ImmutableList.<ReferenceInfo>of(
-                        new ReferenceInfo(new ReferenceIdent(tableIdent, new ColumnIdent("o", ImmutableList.<String>of())), RowGranularity.DOC, DataTypes.OBJECT)
-                ),
-                ImmutableList.<ReferenceInfo>of(),
-                ImmutableMap.<ColumnIdent, IndexReferenceInfo>of(),
-                ImmutableMap.<ColumnIdent, ReferenceInfo>of(),
-                ImmutableList.<ColumnIdent>of(),
-                null,
-                false,
-                true,
-                new String[0],
-                null,
-                5,
-                new BytesRef("0"),
-                ImmutableList.<ColumnIdent>of(),
-                ImmutableList.<PartitionName>of());
+            relationName,
+            ImmutableList.of(
+                new Reference(new ReferenceIdent(relationName, new ColumnIdent("o", ImmutableList.of())), RowGranularity.DOC, DataTypes.OBJECT)
+            ),
+            ImmutableList.of(),
+            ImmutableList.of(),
+            ImmutableList.of(),
+            ImmutableMap.of(),
+            ImmutableMap.of(),
+            ImmutableMap.of(),
+            ImmutableList.of(),
+            null,
+            false,
+            true,
+            new String[0],
+            new String[0],
+            new IndexNameExpressionResolver(Settings.EMPTY),
+            5,
+            new BytesRef("0"),
+            ImmutableMap.of(),
+            ImmutableList.of(),
+            ImmutableList.of(),
+            ColumnPolicy.DYNAMIC,
+            Version.CURRENT,
+            null,
+            false,
+            Operation.ALL
+        );
 
-        ReferenceInfo foobar = info.getReferenceInfo(new ColumnIdent("o", ImmutableList.of("foobar")));
+        Reference foobar = info.getReference(new ColumnIdent("o", ImmutableList.of("foobar")));
         assertNull(foobar);
-        DynamicReference reference = info.getDynamic(new ColumnIdent("o", ImmutableList.of("foobar")));
+        DynamicReference reference = info.getDynamic(new ColumnIdent("o", ImmutableList.of("foobar")), false);
+        assertNull(reference);
+        reference = info.getDynamic(new ColumnIdent("o", ImmutableList.of("foobar")), true);
         assertNotNull(reference);
         assertSame(reference.valueType(), DataTypes.UNDEFINED);
     }
@@ -52,56 +70,59 @@ public class DocTableInfoTest {
     @Test
     public void testGetColumnInfoStrictParent() throws Exception {
 
-        TableIdent dummy = new TableIdent(null, "dummy");
+        RelationName dummy = new RelationName(Schemas.DOC_SCHEMA_NAME, "dummy");
         ReferenceIdent foobarIdent = new ReferenceIdent(dummy, new ColumnIdent("foobar"));
-        ReferenceInfo strictParent = new ReferenceInfo(
-                foobarIdent,
-                RowGranularity.DOC,
-                DataTypes.OBJECT,
-                ReferenceInfo.ObjectType.STRICT,
-                ReferenceInfo.IndexType.NOT_ANALYZED
+        Reference strictParent = new Reference(
+            foobarIdent,
+            RowGranularity.DOC,
+            DataTypes.OBJECT,
+            ColumnPolicy.STRICT,
+            Reference.IndexType.NOT_ANALYZED,
+            true
         );
 
-        ImmutableMap<ColumnIdent, ReferenceInfo> references = ImmutableMap.<ColumnIdent, ReferenceInfo>builder()
-                .put(new ColumnIdent("foobar"), strictParent)
-                .build();
+        ImmutableMap<ColumnIdent, Reference> references = ImmutableMap.<ColumnIdent, Reference>builder()
+            .put(new ColumnIdent("foobar"), strictParent)
+            .build();
 
         DocTableInfo info = new DocTableInfo(
-                mock(DocSchemaInfo.class),
-                dummy,
-                ImmutableList.<ReferenceInfo>of(strictParent),
-                ImmutableList.<ReferenceInfo>of(),
-                ImmutableMap.<ColumnIdent, IndexReferenceInfo>of(),
-                references,
-                ImmutableList.<ColumnIdent>of(),
-                null,
-                false,
-                true,
-                new String[0],
-                null,
-                5,
-                new BytesRef("0"),
-                ImmutableList.<ColumnIdent>of(),
-                ImmutableList.<PartitionName>of());
+            dummy,
+            ImmutableList.of(strictParent),
+            ImmutableList.of(),
+            ImmutableList.of(),
+            ImmutableList.of(),
+            ImmutableMap.of(),
+            references,
+            ImmutableMap.of(),
+            ImmutableList.of(),
+            null,
+            false,
+            true,
+            new String[0],
+            new String[0],
+            new IndexNameExpressionResolver(Settings.EMPTY),
+            5,
+            new BytesRef("0"),
+            ImmutableMap.of(),
+            ImmutableList.of(),
+            ImmutableList.of(),
+            ColumnPolicy.DYNAMIC,
+            Version.CURRENT,
+            null,
+            false,
+            Operation.ALL
+        );
 
 
-        try {
-            ColumnIdent columnIdent = new ColumnIdent("foobar", Arrays.asList("foo", "bar"));
-            assertNull(info.getReferenceInfo(columnIdent));
-            info.getDynamic(columnIdent);
-            fail();
-        } catch (ColumnUnknownException e) {
+        ColumnIdent columnIdent = new ColumnIdent("foobar", Arrays.asList("foo", "bar"));
+        assertNull(info.getReference(columnIdent));
+        assertNull(info.getDynamic(columnIdent, false));
 
-        }
-        try {
-            ColumnIdent columnIdent = new ColumnIdent("foobar", Arrays.asList("foo"));
-            assertNull(info.getReferenceInfo(columnIdent));
-            info.getDynamic(columnIdent);
-            fail();
-        } catch (ColumnUnknownException e) {
+        columnIdent = new ColumnIdent("foobar", Collections.singletonList("foo"));
+        assertNull(info.getReference(columnIdent));
+        assertNull(info.getDynamic(columnIdent, false));
 
-        }
-        ReferenceInfo colInfo = info.getReferenceInfo(new ColumnIdent("foobar"));
+        Reference colInfo = info.getReference(new ColumnIdent("foobar"));
         assertNotNull(colInfo);
     }
 }

@@ -22,14 +22,10 @@
 package io.crate.sql.tree;
 
 import com.google.common.base.Preconditions;
-import com.google.common.base.Predicate;
-import com.google.common.collect.ImmutableMap;
 
 public class ComparisonExpression
-        extends Expression
-{
-    public enum Type
-    {
+    extends Expression {
+    public enum Type {
         EQUAL("="),
         NOT_EQUAL("<>"),
         LESS_THAN("<"),
@@ -38,42 +34,27 @@ public class ComparisonExpression
         GREATER_THAN_OR_EQUAL(">="),
         IS_DISTINCT_FROM("IS DISTINCT FROM"),
         REGEX_MATCH("~"),
-        REGEX_NO_MATCH("!~");
-
-        public static ImmutableMap<Type, Type> INVERSE_MAP = ImmutableMap.<Type, Type>builder()
-                .put(EQUAL, NOT_EQUAL)
-                .put(NOT_EQUAL, EQUAL)
-                .put(LESS_THAN, GREATER_THAN_OR_EQUAL)
-                .put(LESS_THAN_OR_EQUAL, GREATER_THAN)
-                .put(GREATER_THAN, LESS_THAN_OR_EQUAL)
-                .put(GREATER_THAN_OR_EQUAL, LESS_THAN)
-                .put(REGEX_MATCH, REGEX_NO_MATCH)
-                .put(REGEX_NO_MATCH, REGEX_MATCH)
-                .build();
+        REGEX_NO_MATCH("!~"),
+        REGEX_MATCH_CI("~*"),
+        REGEX_NO_MATCH_CI("!~*");
 
         private final String value;
 
-        Type(String value)
-        {
+        Type(String value) {
             this.value = value;
         }
 
-        public String getValue()
-        {
+        public String getValue() {
             return value;
         }
 
-        public Type inverse() {
-            return INVERSE_MAP.get(this);
-        }
     }
 
     private final Type type;
     private final Expression left;
     private final Expression right;
 
-    public ComparisonExpression(Type type, Expression left, Expression right)
-    {
+    public ComparisonExpression(Type type, Expression left, Expression right) {
         Preconditions.checkNotNull(type, "type is null");
         Preconditions.checkNotNull(left, "left is null");
         Preconditions.checkNotNull(right, "right is null");
@@ -83,30 +64,25 @@ public class ComparisonExpression
         this.right = right;
     }
 
-    public Type getType()
-    {
+    public Type getType() {
         return type;
     }
 
-    public Expression getLeft()
-    {
+    public Expression getLeft() {
         return left;
     }
 
-    public Expression getRight()
-    {
+    public Expression getRight() {
         return right;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitComparisonExpression(this, context);
     }
 
     @Override
-    public boolean equals(Object o)
-    {
+    public boolean equals(Object o) {
         if (this == o) {
             return true;
         }
@@ -130,26 +106,11 @@ public class ComparisonExpression
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         int result = type.hashCode();
         result = 31 * result + left.hashCode();
         result = 31 * result + right.hashCode();
         return result;
-    }
-
-    public static Predicate<ComparisonExpression> matchesPattern(final Type type, final Class<?> left, final Class<?> right)
-    {
-        return new Predicate<ComparisonExpression>()
-        {
-            @Override
-            public boolean apply(ComparisonExpression expression)
-            {
-                return expression.getType() == type &&
-                        left.isAssignableFrom(expression.getLeft().getClass()) &&
-                        right.isAssignableFrom(expression.getRight().getClass());
-            }
-        };
     }
 }
 

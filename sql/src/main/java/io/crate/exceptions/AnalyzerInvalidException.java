@@ -21,11 +21,7 @@
 
 package io.crate.exceptions;
 
-public class AnalyzerInvalidException extends ValidationException {
-
-    public AnalyzerInvalidException(String reason, Throwable e) {
-        super(reason, e);
-    }
+public class AnalyzerInvalidException extends ValidationException implements ClusterScopeException {
 
     public AnalyzerInvalidException(String reason) {
         super(reason);
@@ -35,10 +31,4 @@ public class AnalyzerInvalidException extends ValidationException {
     public int errorCode() {
         return 1;
     }
-
-    @Override
-    public Object[] args() {
-        return new Object[0];
-    }
-
 }

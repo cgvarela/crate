@@ -21,8 +21,8 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
-import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nullable;
 import java.util.List;
@@ -30,20 +30,29 @@ import java.util.List;
 public class ColumnDefinition extends TableElement {
 
     private final String ident;
+    @Nullable
+    private final Expression generatedExpression;
+    @Nullable
     private final ColumnType type;
     private final List<ColumnConstraint> constraints;
 
-    public ColumnDefinition(String ident, ColumnType type, @Nullable List<ColumnConstraint> constraints) {
+    public ColumnDefinition(String ident, @Nullable Expression generatedExpression, @Nullable ColumnType type, List<ColumnConstraint> constraints) {
         this.ident = ident;
+        this.generatedExpression = generatedExpression;
         this.type = type;
-        this.constraints = Objects.firstNonNull(constraints, ImmutableList.<ColumnConstraint>of());
+        assert type != null || generatedExpression != null : "Either dataType or generatedExpression must be defined";
+        this.constraints = constraints;
     }
-
 
     public String ident() {
         return ident;
     }
 
+    public Expression expression() {
+        return generatedExpression;
+    }
+
+    @Nullable
     public ColumnType type() {
         return type;
     }
@@ -54,7 +63,7 @@ public class ColumnDefinition extends TableElement {
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(ident, type, constraints);
+        return Objects.hashCode(ident, generatedExpression, type, constraints);
     }
 
     @Override
@@ -64,20 +73,23 @@ public class ColumnDefinition extends TableElement {
 
         ColumnDefinition that = (ColumnDefinition) o;
 
-        if (!constraints.equals(that.constraints)) return false;
         if (!ident.equals(that.ident)) return false;
-        if (!type.equals(that.type)) return false;
+        if (generatedExpression != null ? !generatedExpression.equals(that.generatedExpression) :
+            that.generatedExpression != null) return false;
+        if (type != null ? !type.equals(that.type) : that.type != null) return false;
+        return constraints.equals(that.constraints);
 
-        return true;
     }
+
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("ident", ident)
-                .add("type", type)
-                .add("constraints", constraints)
-                .toString();
+        return MoreObjects.toStringHelper(this)
+            .add("ident", ident)
+            .add("generatedExpression", generatedExpression)
+            .add("type", type)
+            .add("constraints", constraints)
+            .toString();
     }
 
     @Override

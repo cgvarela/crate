@@ -1,1140 +1,403 @@
 /*
- * Licensed to CRATE Technology GmbH ("Crate") under one or more contributor
- * license agreements.  See the NOTICE file distributed with this work for
- * additional information regarding copyright ownership.  Crate licenses
- * this file to you under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.  You may
+ * Licensed to Crate under one or more contributor license agreements.
+ * See the NOTICE file distributed with this work for additional
+ * information regarding copyright ownership.  Crate licenses this file
+ * to you under the Apache License, Version 2.0 (the "License"); you may
+ * not use this file except in compliance with the License.  You may
  * obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
- * License for the specific language governing permissions and limitations
- * under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ * implied.  See the License for the specific language governing
+ * permissions and limitations under the License.
  *
  * However, if you have executed another commercial license agreement
  * with Crate these terms will supersede the license and you may use the
- * software solely pursuant to the terms of the relevant commercial agreement.
+ * software solely pursuant to the terms of the relevant commercial
+ * agreement.
  */
 
 package io.crate.metadata.settings;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Sets;
-import io.crate.analyze.SettingsApplier;
-import io.crate.analyze.SettingsAppliers;
-import org.elasticsearch.common.unit.ByteSizeUnit;
-import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.common.unit.TimeValue;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Joiner;
+import io.crate.breaker.CrateCircuitBreakerService;
+import io.crate.cluster.gracefulstop.DecommissioningService;
+import io.crate.execution.engine.collect.stats.JobsLogService;
+import io.crate.execution.engine.indexing.ShardingUpsertExecutor;
+import io.crate.expression.NestableInput;
+import io.crate.expression.reference.NestedObjectExpression;
+import io.crate.planner.TableStatsService;
+import io.crate.settings.CrateSetting;
+import io.crate.settings.SharedSettings;
+import io.crate.types.DataTypes;
+import io.crate.udc.service.UDCService;
+import org.apache.logging.log4j.Logger;
+import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.cluster.ClusterChangedEvent;
+import org.elasticsearch.cluster.ClusterStateListener;
+import org.elasticsearch.cluster.InternalClusterInfoService;
+import org.elasticsearch.cluster.routing.allocation.DiskThresholdSettings;
+import org.elasticsearch.cluster.routing.allocation.allocator.BalancedShardsAllocator;
+import org.elasticsearch.cluster.routing.allocation.decider.ClusterRebalanceAllocationDecider;
+import org.elasticsearch.cluster.routing.allocation.decider.ConcurrentRebalanceAllocationDecider;
+import org.elasticsearch.cluster.routing.allocation.decider.EnableAllocationDecider;
+import org.elasticsearch.cluster.routing.allocation.decider.FilterAllocationDecider;
+import org.elasticsearch.cluster.routing.allocation.decider.ThrottlingAllocationDecider;
+import org.elasticsearch.cluster.service.ClusterService;
+import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.logging.Loggers;
+import org.elasticsearch.common.lucene.BytesRefs;
+import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.discovery.DiscoverySettings;
+import org.elasticsearch.discovery.zen.ElectMasterService;
+import org.elasticsearch.discovery.zen.ZenDiscovery;
+import org.elasticsearch.gateway.GatewayService;
+import org.elasticsearch.indices.breaker.HierarchyCircuitBreakerService;
+import org.elasticsearch.indices.recovery.RecoverySettings;
 
-import javax.annotation.Nullable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-
-public class CrateSettings {
-
-    public static final NestedSetting STATS = new NestedSetting() {
-        @Override
-        public String name() {
-            return "stats";
-        }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(STATS_ENABLED, STATS_JOBS_LOG_SIZE, STATS_OPERATIONS_LOG_SIZE);
-        }
-    };
-
-    public static final BoolSetting STATS_ENABLED = new BoolSetting() {
-        @Override
-        public String name() {
-            return "enabled";
-        }
-
-        @Override
-        public Boolean defaultValue() {
-            return false;
-        }
-
-        @Override
-        public Setting parent() {
-            return STATS;
-        }
-    };
-
-    public static final IntSetting STATS_JOBS_LOG_SIZE = new IntSetting() {
-        @Override
-        public String name() {
-            return "jobs_log_size";
-        }
-
-        @Override
-        public Integer defaultValue() {
-            return 10_000;
-        }
-
-        @Override
-        public Integer minValue() {
-            return 0;
-        }
-
-        @Override
-        public Setting parent() {
-            return STATS;
-        }
-    };
-
-    public static final IntSetting STATS_OPERATIONS_LOG_SIZE = new IntSetting() {
-        @Override
-        public String name() {
-            return "operations_log_size";
-        }
-
-        @Override
-        public Integer defaultValue() {
-            return 10_000;
-        }
-
-        @Override
-        public Integer minValue() {
-            return 0;
-        }
-
-        @Override
-        public Setting parent() {
-            return STATS;
-        }
-    };
-
-    public static final NestedSetting CLUSTER = new NestedSetting() {
-        @Override
-        public String name() {
-            return "cluster";
-        }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(GRACEFUL_STOP, ROUTING, CLUSTER_INFO);
-        }
-    };
-
-    public static final NestedSetting GRACEFUL_STOP = new NestedSetting() {
-
-        @Override
-        public String name() { return "graceful_stop"; }
-
-        @Override
-        public Setting parent() {
-            return CLUSTER;
-        }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    GRACEFUL_STOP_MIN_AVAILABILITY,
-                    GRACEFUL_STOP_REALLOCATE,
-                    GRACEFUL_STOP_TIMEOUT,
-                    GRACEFUL_STOP_FORCE);
-        }
-    };
-
-    public static final StringSetting GRACEFUL_STOP_MIN_AVAILABILITY = new StringSetting(
-            Sets.newHashSet("full", "primaries", "none")
-    ) {
-        @Override
-        public String name() { return "min_availability"; }
-
-        @Override
-        public String defaultValue() { return "primaries"; }
-
-        @Override
-        public Setting parent() {
-            return GRACEFUL_STOP;
-        }
-    };
-
-    public static final BoolSetting GRACEFUL_STOP_REALLOCATE = new BoolSetting() {
-        @Override
-        public String name() { return "reallocate"; }
-
-        @Override
-        public Boolean defaultValue() {
-            return true;
-        }
-
-        @Override
-        public Setting parent() {
-            return GRACEFUL_STOP;
-        }
-    };
-
-    public static final TimeSetting GRACEFUL_STOP_TIMEOUT = new TimeSetting() {
-        @Override
-        public String name() {
-            return "timeout";
-        }
-
-        @Override
-        public TimeValue defaultValue() {
-            return new TimeValue(7_200_000);
-        }
-
-        @Override
-        public Setting parent() {
-            return GRACEFUL_STOP;
-        }
-    };
-
-    public static final BoolSetting GRACEFUL_STOP_FORCE = new BoolSetting() {
-        @Override
-        public String name() {
-            return "force";
-        }
-
-        @Override
-        public Boolean defaultValue() {
-            return false;
-        }
-
-        @Override
-        public Setting parent() {
-            return GRACEFUL_STOP;
-        }
-    };
-
-    public static final NestedSetting DISCOVERY = new NestedSetting() {
-        @Override
-        public String name() {
-            return "discovery";
-        }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(DISCOVERY_ZEN);
-        }
-    };
-
-    public static final NestedSetting DISCOVERY_ZEN = new NestedSetting() {
-        @Override
-        public String name() { return "zen"; }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    DISCOVERY_ZEN_MIN_MASTER_NODES,
-                    DISCOVERY_ZEN_PING_TIMEOUT,
-                    DISCOVERY_ZEN_PUBLISH_TIMEOUT
-            );
-        }
-
-        @Override
-        public Setting parent() {
-            return DISCOVERY;
-        }
-    };
-
-    public static final IntSetting DISCOVERY_ZEN_MIN_MASTER_NODES = new IntSetting() {
-        @Override
-        public String name() {
-            return "minimum_master_nodes";
-        }
-
-        @Override
-        public Integer defaultValue() {
-            return 1;
-        }
-
-        @Override
-        public Setting parent() {
-            return DISCOVERY_ZEN;
-        }
-    };
-
-    public static final TimeSetting DISCOVERY_ZEN_PING_TIMEOUT = new TimeSetting() {
-        @Override
-        public String name() {
-            return "ping_timeout";
-        }
-
-        @Override
-        public TimeValue defaultValue() {
-            return new TimeValue(3, TimeUnit.SECONDS);
-        }
-
-        @Override
-        public Setting parent() {
-            return DISCOVERY_ZEN;
-        }
-    };
-
-    public static final TimeSetting DISCOVERY_ZEN_PUBLISH_TIMEOUT = new TimeSetting() {
-        @Override
-        public String name() {
-            return "publish_timeout";
-        }
-
-        @Override
-        public TimeValue defaultValue() {
-            return new TimeValue(30, TimeUnit.SECONDS);
-        }
-
-        @Override
-        public Setting parent() {
-            return DISCOVERY_ZEN;
-        }
-    };
-
-    public static final NestedSetting ROUTING = new NestedSetting() {
-        @Override
-        public String name() { return "routing"; }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(ROUTING_ALLOCATION);
-        }
-
-        @Override
-        public Setting parent() {
-            return CLUSTER;
-        }
-    };
-
-    public static final NestedSetting ROUTING_ALLOCATION = new NestedSetting() {
-        @Override
-        public String name() { return "allocation"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING;
-        }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    ROUTING_ALLOCATION_ENABLE,
-                    ROUTING_ALLOCATION_ALLOW_REBALANCE,
-                    ROUTING_ALLOCATION_CLUSTER_CONCURRENT_REBALANCE,
-                    ROUTING_ALLOCATION_NODE_INITIAL_PRIMARIES_RECOVERIES,
-                    ROUTING_ALLOCATION_NODE_CONCURRENT_RECOVERIES,
-                    ROUTING_ALLOCATION_INCLUDE,
-                    ROUTING_ALLOCATION_EXCLUDE,
-                    ROUTING_ALLOCATION_REQUIRE,
-                    ROUTING_ALLOCATION_BALANCE,
-                    ROUTING_ALLOCATION_DISK
-            );
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_ENABLE = new StringSetting(
-            Sets.newHashSet("none", "primaries", "all", "new_primaries")
-    ) {
-        @Override
-        public String name() { return "enable"; }
-
-        @Override
-        public String defaultValue() { return "all"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_ALLOW_REBALANCE = new StringSetting(
-            Sets.newHashSet("always", "indices_primary_active", "indices_all_active")
-    ) {
-        @Override
-        public String name() { return "allow_rebalance"; }
-
-        @Override
-        public String defaultValue() { return "indices_all_active"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-    };
-
-    public static final IntSetting ROUTING_ALLOCATION_CLUSTER_CONCURRENT_REBALANCE = new IntSetting() {
-        @Override
-        public String name() { return "cluster_concurrent_rebalance"; }
-
-        @Override
-        public Integer defaultValue() { return 2; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-    };
-
-    public static final IntSetting ROUTING_ALLOCATION_NODE_INITIAL_PRIMARIES_RECOVERIES = new IntSetting() {
-        @Override
-        public String name() { return "node_initial_primaries_recoveries"; }
-
-        @Override
-        public Integer defaultValue() { return 4; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-    };
-
-    public static final IntSetting ROUTING_ALLOCATION_NODE_CONCURRENT_RECOVERIES = new IntSetting() {
-        @Override
-        public String name() { return "node_concurrent_recoveries"; }
-
-        @Override
-        public Integer defaultValue() { return 2; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-    };
-
-    public static final NestedSetting ROUTING_ALLOCATION_INCLUDE = new NestedSetting() {
-        @Override
-        public String name() { return "include"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_INCLUDE_IP = new StringSetting() {
-        @Override
-        public String name() { return "_ip"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_INCLUDE;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_INCLUDE_ID = new StringSetting() {
-        @Override
-        public String name() { return "_id"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_INCLUDE;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_INCLUDE_HOST = new StringSetting() {
-        @Override
-        public String name() { return "_host"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_INCLUDE;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_INCLUDE_NAME = new StringSetting() {
-        @Override
-        public String name() { return "_name"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_INCLUDE;
-        }
-    };
-
-    public static final NestedSetting ROUTING_ALLOCATION_EXCLUDE = new NestedSetting() {
-        @Override
-        public String name() { return "exclude"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_EXCLUDE_IP = new StringSetting() {
-        @Override
-        public String name() { return "_ip"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_EXCLUDE;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_EXCLUDE_ID = new StringSetting() {
-        @Override
-        public String name() { return "_id"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_EXCLUDE;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_EXCLUDE_HOST = new StringSetting() {
-        @Override
-        public String name() { return "_host"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_EXCLUDE;
-        }
-    };
-
-
-    public static final StringSetting ROUTING_ALLOCATION_EXCLUDE_NAME = new StringSetting() {
-        @Override
-        public String name() { return "_name"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_EXCLUDE;
-        }
-    };
-
-    public static final NestedSetting ROUTING_ALLOCATION_REQUIRE = new NestedSetting() {
-        @Override
-        public String name() { return "require"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_REQUIRE_IP = new StringSetting() {
-        @Override
-        public String name() { return "_ip"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_REQUIRE;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_REQUIRE_ID = new StringSetting() {
-        @Override
-        public String name() { return "_id"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_REQUIRE;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_REQUIRE_HOST = new StringSetting() {
-        @Override
-        public String name() { return "_host"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_REQUIRE;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_REQUIRE_NAME = new StringSetting() {
-        @Override
-        public String name() { return "_name"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_REQUIRE;
-        }
-    };
-
-    public static final NestedSetting ROUTING_ALLOCATION_BALANCE = new NestedSetting() {
-        @Override
-        public String name() { return "balance"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    ROUTING_ALLOCATION_BALANCE_SHARD,
-                    ROUTING_ALLOCATION_BALANCE_INDEX,
-                    ROUTING_ALLOCATION_BALANCE_PRIMARY,
-                    ROUTING_ALLOCATION_BALANCE_THRESHOLD
-            );
-        }
-    };
-
-    public static final FloatSetting ROUTING_ALLOCATION_BALANCE_SHARD = new FloatSetting() {
-        @Override
-        public String name() { return "shard"; }
-
-        @Override
-        public Float defaultValue() { return 0.45f; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_BALANCE;
-        }
-    };
-
-    public static final FloatSetting ROUTING_ALLOCATION_BALANCE_INDEX = new FloatSetting() {
-        @Override
-        public String name() { return "index"; }
-
-        @Override
-        public Float defaultValue() { return 0.5f; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_BALANCE;
-        }
-    };
-
-    public static final FloatSetting ROUTING_ALLOCATION_BALANCE_PRIMARY = new FloatSetting() {
-        @Override
-        public String name() { return "primary"; }
-
-        @Override
-        public Float defaultValue() { return 0.05f; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_BALANCE;
-        }
-    };
-
-    public static final FloatSetting ROUTING_ALLOCATION_BALANCE_THRESHOLD = new FloatSetting() {
-        @Override
-        public String name() { return "threshold"; }
-
-        @Override
-        public Float defaultValue() { return 1.0f; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_BALANCE;
-        }
-    };
-
-    public static final NestedSetting ROUTING_ALLOCATION_DISK = new NestedSetting() {
-        @Override
-        public String name() { return "disk"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION;
-        }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    ROUTING_ALLOCATION_DISK_THRESHOLD_ENABLED,
-                    ROUTING_ALLOCATION_DISK_WATERMARK
-            );
-        }
-    };
-
-    public static final BoolSetting ROUTING_ALLOCATION_DISK_THRESHOLD_ENABLED = new BoolSetting() {
-        @Override
-        public String name() { return "threshold_enabled"; }
-
-        @Override
-        public Boolean defaultValue() { return true; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_DISK;
-        }
-    };
-
-    public static final NestedSetting ROUTING_ALLOCATION_DISK_WATERMARK = new NestedSetting() {
-        @Override
-        public String name() { return "watermark"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_DISK;
-        }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    ROUTING_ALLOCATION_DISK_WATERMARK_LOW,
-                    ROUTING_ALLOCATION_DISK_WATERMARK_HIGH
-            );
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_DISK_WATERMARK_LOW = new StringSetting() {
-        @Override
-        public String name() { return "low"; }
-
-        @Override
-        public String defaultValue() { return "85%"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_DISK_WATERMARK;
-        }
-    };
-
-    public static final StringSetting ROUTING_ALLOCATION_DISK_WATERMARK_HIGH = new StringSetting() {
-        @Override
-        public String name() { return "high"; }
-
-        @Override
-        public String defaultValue() { return "90%"; }
-
-        @Override
-        public Setting parent() {
-            return ROUTING_ALLOCATION_DISK_WATERMARK;
-        }
-    };
-
-    public static final NestedSetting INDICES = new NestedSetting() {
-        @Override
-        public String name() {
-            return "indices";
-        }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(INDICES_RECOVERY, INDICES_STORE, INDICES_FIELDDATA);
-        }
-    };
-
-    public static final NestedSetting INDICES_RECOVERY = new NestedSetting() {
-        @Override
-        public String name() { return "recovery"; }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    INDICES_RECOVERY_CONCURRENT_STREAMS,
-                    INDICES_RECOVERY_FILE_CHUNK_SIZE,
-                    INDICES_RECOVERY_TRANSLOG_OPS,
-                    INDICES_RECOVERY_TRANSLOG_SIZE,
-                    INDICES_RECOVERY_COMPRESS,
-                    INDICES_RECOVERY_MAX_BYTES_PER_SEC
-            );
-        }
-
-        @Override
-        public Setting parent() {
-            return INDICES;
-        }
-    };
-
-    public static final IntSetting INDICES_RECOVERY_CONCURRENT_STREAMS = new IntSetting() {
-        @Override
-        public String name() { return "concurrent_streams"; }
-
-        @Override
-        public Integer defaultValue() { return 3; }
-
-        @Override
-        public Setting parent() {
-            return INDICES_RECOVERY;
-        }
-    };
-
-    public static final ByteSizeSetting INDICES_RECOVERY_FILE_CHUNK_SIZE = new ByteSizeSetting() {
-        @Override
-        public String name() { return "file_chunk_size"; }
-
-        @Override
-        public ByteSizeValue defaultValue() { return new ByteSizeValue(512, ByteSizeUnit.KB); }
-
-        @Override
-        public Setting parent() {
-            return INDICES_RECOVERY;
-        }
-    };
-
-    public static final IntSetting INDICES_RECOVERY_TRANSLOG_OPS = new IntSetting() {
-        @Override
-        public String name() { return "translog_ops"; }
-
-        @Override
-        public Integer defaultValue() { return 1000; }
-
-        @Override
-        public Setting parent() {
-            return INDICES_RECOVERY;
-        }
-    };
-
-    public static final ByteSizeSetting INDICES_RECOVERY_TRANSLOG_SIZE = new ByteSizeSetting() {
-        @Override
-        public String name() { return "translog_size"; }
-
-        @Override
-        public ByteSizeValue defaultValue() { return new ByteSizeValue(512, ByteSizeUnit.KB); }
-
-        @Override
-        public Setting parent() {
-            return INDICES_RECOVERY;
-        }
-    };
-
-    public static final BoolSetting INDICES_RECOVERY_COMPRESS = new BoolSetting() {
-        @Override
-        public String name() { return "compress"; }
-
-        @Override
-        public Boolean defaultValue() { return true; }
-
-        @Override
-        public Setting parent() {
-            return INDICES_RECOVERY;
-        }
-    };
-
-    public static final ByteSizeSetting INDICES_RECOVERY_MAX_BYTES_PER_SEC = new ByteSizeSetting() {
-        @Override
-        public String name() { return "max_bytes_per_sec"; }
-
-        @Override
-        public ByteSizeValue defaultValue() { return new ByteSizeValue(20, ByteSizeUnit.MB); }
-
-        @Override
-        public Setting parent() {
-            return INDICES_RECOVERY;
-        }
-    };
-
-    public static final NestedSetting INDICES_STORE = new NestedSetting() {
-        @Override
-        public String name() { return "store"; }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(INDICES_STORE_THROTTLE);
-        }
-
-        @Override
-        public Setting parent() {
-            return INDICES;
-        }
-    };
-
-    public static final NestedSetting INDICES_STORE_THROTTLE = new NestedSetting() {
-        @Override
-        public String name() { return "throttle"; }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    INDICES_STORE_THROTTLE_TYPE,
-                    INDICES_STORE_THROTTLE_MAX_BYTES_PER_SEC
-            );
-        }
-
-        @Override
-        public Setting parent() {
-            return INDICES_STORE;
-        }
-    };
-
-    public static final StringSetting INDICES_STORE_THROTTLE_TYPE = new StringSetting(
-            Sets.newHashSet("all", "merge", "none")
-    ) {
-        @Override
-        public String name() { return "type"; }
-
-        @Override
-        public String defaultValue() { return "merge"; }
-
-        @Override
-        public Setting parent() {
-            return INDICES_STORE_THROTTLE;
-        }
-    };
-
-    public static final ByteSizeSetting INDICES_STORE_THROTTLE_MAX_BYTES_PER_SEC = new ByteSizeSetting() {
-        @Override
-        public String name() { return "max_bytes_per_sec"; }
-
-        @Override
-        public ByteSizeValue defaultValue() { return new ByteSizeValue(20, ByteSizeUnit.MB); }
-
-        @Override
-        public Setting parent() {
-            return INDICES_STORE_THROTTLE;
-        }
-    };
-
-    public static final NestedSetting INDICES_FIELDDATA = new NestedSetting() {
-        @Override
-        public String name() { return "fielddata"; }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(INDICES_FIELDDATA_BREAKER);
-        }
-
-        @Override
-        public Setting parent() {
-            return INDICES;
-        }
-    };
-
-    public static final NestedSetting INDICES_FIELDDATA_BREAKER = new NestedSetting() {
-        @Override
-        public String name() { return "breaker"; }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    INDICES_FIELDDATA_BREAKER_LIMIT,
-                    INDICES_FIELDDATA_BREAKER_OVERHEAD
-            );
-        }
-
-        @Override
-        public Setting parent() {
-            return INDICES_FIELDDATA;
-        }
-    };
-
-    public static final StringSetting INDICES_FIELDDATA_BREAKER_LIMIT = new StringSetting() {
-        @Override
-        public String name() { return "limit"; }
-
-        @Override
-        public String defaultValue() { return "60%"; }
-
-        @Override
-        public Setting parent() {
-            return INDICES_FIELDDATA_BREAKER;
-        }
-    };
-
-    public static final DoubleSetting INDICES_FIELDDATA_BREAKER_OVERHEAD = new DoubleSetting() {
-        @Override
-        public String name() { return "overhead"; }
-
-        @Override
-        public Double defaultValue() { return 1.03; }
-
-        @Override
-        public Setting parent() {
-            return INDICES_FIELDDATA_BREAKER;
-        }
-    };
-
-    public static final NestedSetting CLUSTER_INFO = new NestedSetting() {
-        @Override
-        public String name() { return "info"; }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(CLUSTER_INFO_UPDATE);
-        }
-
-        @Override
-        public Setting parent() {
-            return CLUSTER;
-        }
-    };
-
-    public static final NestedSetting CLUSTER_INFO_UPDATE = new NestedSetting() {
-        @Override
-        public String name() { return "update"; }
-
-        @Override
-        public List<Setting> children() {
-            return ImmutableList.<Setting>of(
-                    CLUSTER_INFO_UPDATE_INTERVAL
-            );
-        }
-
-        @Override
-        public Setting parent() {
-            return CLUSTER_INFO;
-        }
-    };
-
-    public static final TimeSetting CLUSTER_INFO_UPDATE_INTERVAL = new TimeSetting() {
-        @Override
-        public String name() {
-            return "interval";
-        }
-
-        @Override
-        public TimeValue defaultValue() {
-            return new TimeValue(30, TimeUnit.SECONDS);
-
-        }
-
-        @Override
-        public Setting parent() {
-            return CLUSTER_INFO_UPDATE;
-        }
-    };
-
-    public static final ImmutableList<Setting> CRATE_SETTINGS = ImmutableList.<Setting>of(STATS, CLUSTER, DISCOVERY, INDICES);
-
-    public static final Map<String, SettingsApplier> SUPPORTED_SETTINGS = ImmutableMap.<String, SettingsApplier>builder()
-            .put(CrateSettings.STATS.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.STATS))
-            .put(CrateSettings.STATS_JOBS_LOG_SIZE.settingName(),
-                    new SettingsAppliers.IntSettingsApplier(CrateSettings.STATS_JOBS_LOG_SIZE))
-            .put(CrateSettings.STATS_OPERATIONS_LOG_SIZE.settingName(),
-                    new SettingsAppliers.IntSettingsApplier(CrateSettings.STATS_OPERATIONS_LOG_SIZE))
-            .put(CrateSettings.STATS_ENABLED.settingName(),
-                    new SettingsAppliers.BooleanSettingsApplier(CrateSettings.STATS_ENABLED))
-            .put(CrateSettings.CLUSTER.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.CLUSTER))
-            .put(CrateSettings.GRACEFUL_STOP.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.GRACEFUL_STOP))
-            .put(CrateSettings.GRACEFUL_STOP_MIN_AVAILABILITY.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.GRACEFUL_STOP_MIN_AVAILABILITY))
-            .put(CrateSettings.GRACEFUL_STOP_REALLOCATE.settingName(),
-                    new SettingsAppliers.BooleanSettingsApplier(CrateSettings.GRACEFUL_STOP_REALLOCATE))
-            .put(CrateSettings.GRACEFUL_STOP_FORCE.settingName(),
-                    new SettingsAppliers.BooleanSettingsApplier(CrateSettings.GRACEFUL_STOP_FORCE))
-            .put(CrateSettings.GRACEFUL_STOP_TIMEOUT.settingName(),
-                    new SettingsAppliers.TimeSettingsApplier(CrateSettings.GRACEFUL_STOP_TIMEOUT))
-            .put(CrateSettings.DISCOVERY.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.DISCOVERY))
-            .put(CrateSettings.DISCOVERY_ZEN.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.DISCOVERY_ZEN))
-            .put(CrateSettings.DISCOVERY_ZEN_MIN_MASTER_NODES.settingName(),
-                    new SettingsAppliers.IntSettingsApplier(CrateSettings.DISCOVERY_ZEN_MIN_MASTER_NODES))
-            .put(CrateSettings.DISCOVERY_ZEN_PING_TIMEOUT.settingName(),
-                    new SettingsAppliers.TimeSettingsApplier(CrateSettings.DISCOVERY_ZEN_PING_TIMEOUT))
-            .put(CrateSettings.DISCOVERY_ZEN_PUBLISH_TIMEOUT.settingName(),
-                    new SettingsAppliers.TimeSettingsApplier(CrateSettings.DISCOVERY_ZEN_PUBLISH_TIMEOUT))
-            .put(CrateSettings.ROUTING.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.ROUTING))
-            .put(CrateSettings.ROUTING_ALLOCATION.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.ROUTING_ALLOCATION))
-            .put(CrateSettings.ROUTING_ALLOCATION_ENABLE.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_ENABLE))
-            .put(CrateSettings.ROUTING_ALLOCATION_ALLOW_REBALANCE.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_ALLOW_REBALANCE))
-            .put(CrateSettings.ROUTING_ALLOCATION_CLUSTER_CONCURRENT_REBALANCE.settingName(),
-                    new SettingsAppliers.IntSettingsApplier(CrateSettings.ROUTING_ALLOCATION_CLUSTER_CONCURRENT_REBALANCE))
-            .put(CrateSettings.ROUTING_ALLOCATION_NODE_INITIAL_PRIMARIES_RECOVERIES.settingName(),
-                    new SettingsAppliers.IntSettingsApplier(CrateSettings.ROUTING_ALLOCATION_NODE_INITIAL_PRIMARIES_RECOVERIES))
-            .put(CrateSettings.ROUTING_ALLOCATION_NODE_CONCURRENT_RECOVERIES.settingName(),
-                    new SettingsAppliers.IntSettingsApplier(CrateSettings.ROUTING_ALLOCATION_NODE_CONCURRENT_RECOVERIES))
-            .put(CrateSettings.ROUTING_ALLOCATION_INCLUDE.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.ROUTING_ALLOCATION_INCLUDE))
-            .put(CrateSettings.ROUTING_ALLOCATION_INCLUDE_IP.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_INCLUDE_IP))
-            .put(CrateSettings.ROUTING_ALLOCATION_INCLUDE_ID.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_INCLUDE_ID))
-            .put(CrateSettings.ROUTING_ALLOCATION_INCLUDE_HOST.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_INCLUDE_HOST))
-            .put(CrateSettings.ROUTING_ALLOCATION_INCLUDE_NAME.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_INCLUDE_NAME))
-            .put(CrateSettings.ROUTING_ALLOCATION_EXCLUDE.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.ROUTING_ALLOCATION_EXCLUDE))
-            .put(CrateSettings.ROUTING_ALLOCATION_EXCLUDE_IP.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_EXCLUDE_IP))
-            .put(CrateSettings.ROUTING_ALLOCATION_EXCLUDE_ID.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_EXCLUDE_ID))
-            .put(CrateSettings.ROUTING_ALLOCATION_EXCLUDE_HOST.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_EXCLUDE_HOST))
-            .put(CrateSettings.ROUTING_ALLOCATION_EXCLUDE_NAME.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_EXCLUDE_NAME))
-            .put(CrateSettings.ROUTING_ALLOCATION_REQUIRE.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.ROUTING_ALLOCATION_REQUIRE))
-            .put(CrateSettings.ROUTING_ALLOCATION_REQUIRE_IP.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_REQUIRE_IP))
-            .put(CrateSettings.ROUTING_ALLOCATION_REQUIRE_ID.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_REQUIRE_ID))
-            .put(CrateSettings.ROUTING_ALLOCATION_REQUIRE_HOST.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_REQUIRE_HOST))
-            .put(CrateSettings.ROUTING_ALLOCATION_REQUIRE_NAME.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_REQUIRE_NAME))
-            .put(CrateSettings.ROUTING_ALLOCATION_BALANCE.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.ROUTING_ALLOCATION_BALANCE))
-            .put(CrateSettings.ROUTING_ALLOCATION_BALANCE_SHARD.settingName(),
-                    new SettingsAppliers.FloatSettingsApplier(CrateSettings.ROUTING_ALLOCATION_BALANCE_SHARD))
-            .put(CrateSettings.ROUTING_ALLOCATION_BALANCE_INDEX.settingName(),
-                    new SettingsAppliers.FloatSettingsApplier(CrateSettings.ROUTING_ALLOCATION_BALANCE_INDEX))
-            .put(CrateSettings.ROUTING_ALLOCATION_BALANCE_PRIMARY.settingName(),
-                    new SettingsAppliers.FloatSettingsApplier(CrateSettings.ROUTING_ALLOCATION_BALANCE_PRIMARY))
-            .put(CrateSettings.ROUTING_ALLOCATION_BALANCE_THRESHOLD.settingName(),
-                    new SettingsAppliers.FloatSettingsApplier(CrateSettings.ROUTING_ALLOCATION_BALANCE_THRESHOLD))
-            .put(CrateSettings.ROUTING_ALLOCATION_DISK.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.ROUTING_ALLOCATION_DISK))
-            .put(CrateSettings.ROUTING_ALLOCATION_DISK_THRESHOLD_ENABLED.settingName(),
-                    new SettingsAppliers.BooleanSettingsApplier(CrateSettings.ROUTING_ALLOCATION_DISK_THRESHOLD_ENABLED))
-            .put(CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK))
-            .put(CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK_LOW.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK_LOW))
-            .put(CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK_HIGH.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK_HIGH))
-            .put(CrateSettings.INDICES.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.INDICES))
-            .put(CrateSettings.INDICES_RECOVERY.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.INDICES_RECOVERY))
-            .put(CrateSettings.INDICES_RECOVERY_CONCURRENT_STREAMS.settingName(),
-                    new SettingsAppliers.IntSettingsApplier(CrateSettings.INDICES_RECOVERY_CONCURRENT_STREAMS))
-            .put(CrateSettings.INDICES_RECOVERY_FILE_CHUNK_SIZE.settingName(),
-                    new SettingsAppliers.ByteSizeSettingsApplier(CrateSettings.INDICES_RECOVERY_FILE_CHUNK_SIZE))
-            .put(CrateSettings.INDICES_RECOVERY_TRANSLOG_OPS.settingName(),
-                    new SettingsAppliers.IntSettingsApplier(CrateSettings.INDICES_RECOVERY_TRANSLOG_OPS))
-            .put(CrateSettings.INDICES_RECOVERY_TRANSLOG_SIZE.settingName(),
-                    new SettingsAppliers.ByteSizeSettingsApplier(CrateSettings.INDICES_RECOVERY_TRANSLOG_SIZE))
-            .put(CrateSettings.INDICES_RECOVERY_COMPRESS.settingName(),
-                    new SettingsAppliers.BooleanSettingsApplier(CrateSettings.INDICES_RECOVERY_COMPRESS))
-            .put(CrateSettings.INDICES_RECOVERY_MAX_BYTES_PER_SEC.settingName(),
-                    new SettingsAppliers.ByteSizeSettingsApplier(CrateSettings.INDICES_RECOVERY_MAX_BYTES_PER_SEC))
-            .put(CrateSettings.INDICES_STORE.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.INDICES_STORE))
-            .put(CrateSettings.INDICES_STORE_THROTTLE.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.INDICES_STORE_THROTTLE))
-            .put(CrateSettings.INDICES_STORE_THROTTLE_TYPE.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.INDICES_STORE_THROTTLE_TYPE))
-            .put(CrateSettings.INDICES_STORE_THROTTLE_MAX_BYTES_PER_SEC.settingName(),
-                    new SettingsAppliers.ByteSizeSettingsApplier(CrateSettings.INDICES_STORE_THROTTLE_MAX_BYTES_PER_SEC))
-            .put(CrateSettings.INDICES_FIELDDATA.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.INDICES_FIELDDATA))
-            .put(CrateSettings.INDICES_FIELDDATA_BREAKER.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.INDICES_FIELDDATA_BREAKER))
-            .put(CrateSettings.INDICES_FIELDDATA_BREAKER_LIMIT.settingName(),
-                    new SettingsAppliers.StringSettingsApplier(CrateSettings.INDICES_FIELDDATA_BREAKER_LIMIT))
-            .put(CrateSettings.INDICES_FIELDDATA_BREAKER_OVERHEAD.settingName(),
-                    new SettingsAppliers.DoubleSettingsApplier(CrateSettings.INDICES_FIELDDATA_BREAKER_OVERHEAD))
-            .put(CrateSettings.CLUSTER_INFO.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.CLUSTER_INFO))
-            .put(CrateSettings.CLUSTER_INFO_UPDATE.settingName(),
-                    new SettingsAppliers.ObjectSettingsApplier(CrateSettings.CLUSTER_INFO_UPDATE))
-            .put(CrateSettings.CLUSTER_INFO_UPDATE_INTERVAL.settingName(),
-                    new SettingsAppliers.TimeSettingsApplier(CrateSettings.CLUSTER_INFO_UPDATE_INTERVAL))
-            .build();
-
-    @Nullable
-    public static SettingsApplier getSetting(String name) {
-        return SUPPORTED_SETTINGS.get(name);
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+public final class CrateSettings implements ClusterStateListener {
+
+    public static final List<CrateSetting> CRATE_CLUSTER_SETTINGS = Collections.unmodifiableList(
+        Arrays.asList(
+            // STATS
+            JobsLogService.STATS_ENABLED_SETTING,
+            JobsLogService.STATS_JOBS_LOG_SIZE_SETTING,
+            JobsLogService.STATS_JOBS_LOG_EXPIRATION_SETTING,
+            JobsLogService.STATS_OPERATIONS_LOG_SIZE_SETTING,
+            JobsLogService.STATS_OPERATIONS_LOG_EXPIRATION_SETTING,
+            TableStatsService.STATS_SERVICE_REFRESH_INTERVAL_SETTING,
+            CrateCircuitBreakerService.JOBS_LOG_CIRCUIT_BREAKER_LIMIT_SETTING,
+            CrateCircuitBreakerService.JOBS_LOG_CIRCUIT_BREAKER_OVERHEAD_SETTING,
+            CrateCircuitBreakerService.OPERATIONS_LOG_CIRCUIT_BREAKER_LIMIT_SETTING,
+            CrateCircuitBreakerService.OPERATIONS_LOG_CIRCUIT_BREAKER_OVERHEAD_SETTING,
+
+            // INDICES
+            CrateCircuitBreakerService.QUERY_CIRCUIT_BREAKER_LIMIT_SETTING,
+            CrateCircuitBreakerService.QUERY_CIRCUIT_BREAKER_OVERHEAD_SETTING,
+
+            // BULK
+            ShardingUpsertExecutor.BULK_REQUEST_TIMEOUT_SETTING,
+
+            // GRACEFUL STOP
+            DecommissioningService.DECOMMISSION_INTERNAL_SETTING_GROUP,
+            DecommissioningService.GRACEFUL_STOP_MIN_AVAILABILITY_SETTING,
+            DecommissioningService.GRACEFUL_STOP_REALLOCATE_SETTING,
+            DecommissioningService.GRACEFUL_STOP_TIMEOUT_SETTING,
+            DecommissioningService.GRACEFUL_STOP_FORCE_SETTING,
+
+            // UDC
+            UDCService.UDC_ENABLED_SETTING,
+            UDCService.UDC_URL_SETTING,
+            UDCService.UDC_INITIAL_DELAY_SETTING,
+            UDCService.UDC_INTERVAL_SETTING,
+
+            // ENTERPRISE
+            SharedSettings.ENTERPRISE_LICENSE_SETTING,
+            SharedSettings.LICENSE_IDENT_SETTING
+
+
+        ));
+
+    private static final List<CrateSetting> EXPOSED_ES_SETTINGS = Collections.unmodifiableList(
+        Arrays.asList(
+            // CLUSTER
+            CrateSetting.of(InternalClusterInfoService.INTERNAL_CLUSTER_INFO_UPDATE_INTERVAL_SETTING, DataTypes.STRING),
+            // CLUSTER ROUTING
+            CrateSetting.of(EnableAllocationDecider.CLUSTER_ROUTING_ALLOCATION_ENABLE_SETTING, DataTypes.STRING),
+            CrateSetting.of(EnableAllocationDecider.CLUSTER_ROUTING_REBALANCE_ENABLE_SETTING, DataTypes.STRING),
+            CrateSetting.of(ClusterRebalanceAllocationDecider.CLUSTER_ROUTING_ALLOCATION_ALLOW_REBALANCE_SETTING, DataTypes.STRING),
+            CrateSetting.of(ConcurrentRebalanceAllocationDecider.CLUSTER_ROUTING_ALLOCATION_CLUSTER_CONCURRENT_REBALANCE_SETTING, DataTypes.INTEGER),
+            CrateSetting.of(ThrottlingAllocationDecider.CLUSTER_ROUTING_ALLOCATION_NODE_INITIAL_PRIMARIES_RECOVERIES_SETTING, DataTypes.INTEGER),
+            CrateSetting.of(ThrottlingAllocationDecider.CLUSTER_ROUTING_ALLOCATION_NODE_CONCURRENT_RECOVERIES_SETTING, DataTypes.INTEGER),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_INCLUDE_GROUP_SETTING.getKey() + "_ip",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_INCLUDE_GROUP_SETTING.getKey() + "_id",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_INCLUDE_GROUP_SETTING.getKey() + "_host",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_INCLUDE_GROUP_SETTING.getKey() + "_name",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_EXCLUDE_GROUP_SETTING.getKey() + "_ip",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_EXCLUDE_GROUP_SETTING.getKey() + "_id",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_EXCLUDE_GROUP_SETTING.getKey() + "_host",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_EXCLUDE_GROUP_SETTING.getKey() + "_name",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_REQUIRE_GROUP_SETTING.getKey() + "_ip",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_REQUIRE_GROUP_SETTING.getKey() + "_id",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_REQUIRE_GROUP_SETTING.getKey() + "_host",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(Setting.simpleString(
+                FilterAllocationDecider.CLUSTER_ROUTING_REQUIRE_GROUP_SETTING.getKey() + "_name",
+                Setting.Property.NodeScope, Setting.Property.Dynamic), DataTypes.STRING),
+            CrateSetting.of(BalancedShardsAllocator.SHARD_BALANCE_FACTOR_SETTING, DataTypes.FLOAT),
+            CrateSetting.of(BalancedShardsAllocator.INDEX_BALANCE_FACTOR_SETTING, DataTypes.FLOAT),
+            CrateSetting.of(BalancedShardsAllocator.THRESHOLD_SETTING, DataTypes.FLOAT),
+            CrateSetting.of(DiskThresholdSettings.CLUSTER_ROUTING_ALLOCATION_DISK_THRESHOLD_ENABLED_SETTING, DataTypes.BOOLEAN),
+            CrateSetting.of(DiskThresholdSettings.CLUSTER_ROUTING_ALLOCATION_LOW_DISK_WATERMARK_SETTING, DataTypes.STRING),
+            CrateSetting.of(DiskThresholdSettings.CLUSTER_ROUTING_ALLOCATION_HIGH_DISK_WATERMARK_SETTING, DataTypes.STRING),
+            CrateSetting.of(DiskThresholdSettings.CLUSTER_ROUTING_ALLOCATION_DISK_FLOOD_STAGE_WATERMARK_SETTING, DataTypes.STRING),
+            // DISCOVERY
+            CrateSetting.of(ElectMasterService.DISCOVERY_ZEN_MINIMUM_MASTER_NODES_SETTING, DataTypes.INTEGER),
+            CrateSetting.of(ZenDiscovery.PING_TIMEOUT_SETTING, DataTypes.STRING),
+            CrateSetting.of(DiscoverySettings.PUBLISH_TIMEOUT_SETTING, DataTypes.STRING),
+            // GATEWAY
+            CrateSetting.of(GatewayService.RECOVER_AFTER_NODES_SETTING, DataTypes.INTEGER),
+            CrateSetting.of(GatewayService.RECOVER_AFTER_TIME_SETTING, DataTypes.STRING),
+            CrateSetting.of(GatewayService.EXPECTED_NODES_SETTING, DataTypes.INTEGER),
+            // INDICES
+            CrateSetting.of(RecoverySettings.INDICES_RECOVERY_MAX_BYTES_PER_SEC_SETTING, DataTypes.STRING),
+            CrateSetting.of(RecoverySettings.INDICES_RECOVERY_RETRY_DELAY_STATE_SYNC_SETTING, DataTypes.STRING),
+            CrateSetting.of(RecoverySettings.INDICES_RECOVERY_RETRY_DELAY_NETWORK_SETTING, DataTypes.STRING),
+            CrateSetting.of(RecoverySettings.INDICES_RECOVERY_INTERNAL_ACTION_TIMEOUT_SETTING, DataTypes.STRING),
+            CrateSetting.of(RecoverySettings.INDICES_RECOVERY_INTERNAL_LONG_ACTION_TIMEOUT_SETTING, DataTypes.STRING),
+            CrateSetting.of(RecoverySettings.INDICES_RECOVERY_ACTIVITY_TIMEOUT_SETTING, DataTypes.STRING),
+            CrateSetting.of(HierarchyCircuitBreakerService.FIELDDATA_CIRCUIT_BREAKER_LIMIT_SETTING, DataTypes.STRING),
+            CrateSetting.of(HierarchyCircuitBreakerService.FIELDDATA_CIRCUIT_BREAKER_OVERHEAD_SETTING, DataTypes.DOUBLE),
+            CrateSetting.of(HierarchyCircuitBreakerService.REQUEST_CIRCUIT_BREAKER_LIMIT_SETTING, DataTypes.STRING),
+            CrateSetting.of(HierarchyCircuitBreakerService.REQUEST_CIRCUIT_BREAKER_OVERHEAD_SETTING, DataTypes.DOUBLE)
+        ));
+
+
+    public static final List<CrateSetting> BUILT_IN_SETTINGS = Stream.concat(CRATE_CLUSTER_SETTINGS.stream(), EXPOSED_ES_SETTINGS.stream())
+        .filter(cs -> cs.getKey().startsWith("crate.internal.") == false)  // don't expose internal settings
+        .collect(Collectors.toList());
+    private static final List<String> BUILT_IN_SETTING_NAMES = BUILT_IN_SETTINGS.stream()
+        .map(CrateSetting::getKey)
+        .collect(Collectors.toList());
+    private static final Joiner DOT_JOINER = Joiner.on(".");
+
+    public static boolean isValidSetting(String name) {
+        return isLoggingSetting(name) ||
+               BUILT_IN_SETTING_NAMES.contains(name) ||
+               BUILT_IN_SETTING_NAMES.stream().filter(s -> s.startsWith(name + "."))
+                   .collect(Collectors.toList()).isEmpty() == false;
     }
 
-    public static Set<String> settingNamesByPrefix(String prefix) {
-        Set<String> settingNames = Sets.newHashSet();
-        SettingsApplier settingsApplier = SUPPORTED_SETTINGS.get(prefix);
-        if (settingsApplier != null
-                && !(settingsApplier instanceof SettingsAppliers.ObjectSettingsApplier)) {
-            settingNames.add(prefix);
+    public static List<String> settingNamesByPrefix(String prefix) {
+        if (isLoggingSetting(prefix)) {
+            return Collections.singletonList(prefix);
+        }
+        List<String> filteredList = new ArrayList<>();
+        for (String key : BUILT_IN_SETTING_NAMES) {
+            if (key.startsWith(prefix)) {
+                filteredList.add(key);
+            }
+        }
+        return filteredList;
+    }
+
+    public static void checkIfRuntimeSetting(String name) {
+        for (CrateSetting<?> crateSetting : BUILT_IN_SETTINGS) {
+            Setting<?> setting = crateSetting.setting();
+            if (setting.getKey().equals(name) && setting.isDynamic() == false) {
+                throw new UnsupportedOperationException(String.format(Locale.ENGLISH,
+                    "Setting '%s' cannot be set/reset at runtime", name));
+            }
+        }
+    }
+
+    public static void flattenSettings(Settings.Builder settingsBuilder,
+                                       String key,
+                                       Object value) {
+        if (value instanceof Map) {
+            for (Map.Entry<String, Object> setting : ((Map<String, Object>) value).entrySet()) {
+                flattenSettings(settingsBuilder, DOT_JOINER.join(key, setting.getKey()), setting.getValue());
+            }
         } else {
-            prefix += ".";
-            for (String name : SUPPORTED_SETTINGS.keySet()) {
-                if (name.startsWith(prefix)) {
-                    settingNames.add(name);
+            if (value instanceof BytesRef) {
+                value = BytesRefs.toString(value);
+            }
+            settingsBuilder.put(key, value.toString());
+        }
+    }
+
+    private static boolean isLoggingSetting(String name) {
+        return name.startsWith("logger.");
+    }
+
+
+    private final Logger logger;
+    private final Settings initialSettings;
+    private final Map<String, NestableInput> referenceImplementationTree;
+
+    private volatile Settings settings;
+
+    @Inject
+    public CrateSettings(ClusterService clusterService, Settings settings) {
+        logger = Loggers.getLogger(this.getClass(), settings);
+        Settings.Builder defaultsBuilder = Settings.builder();
+        for (CrateSetting builtInSetting : BUILT_IN_SETTINGS) {
+            defaultsBuilder.put(builtInSetting.getKey(), builtInSetting.setting().getDefaultRaw(settings));
+        }
+        initialSettings = defaultsBuilder.put(settings).build();
+        this.settings = initialSettings;
+        referenceImplementationTree = buildReferenceTree();
+        clusterService.addListener(this);
+    }
+
+    @Override
+    public void clusterChanged(ClusterChangedEvent event) {
+        try {
+            // nothing to do until we actually recover from the gateway or any other block indicates we need to disable persistency
+            if (event.state().blocks().disableStatePersistence() == false && event.metaDataChanged()) {
+                Settings incomingSetting = event.state().metaData().settings();
+                settings = Settings.builder().put(initialSettings).put(incomingSetting).build();
+            }
+        } catch (Exception ex) {
+            logger.warn("failed to apply cluster settings", ex);
+        }
+
+    }
+
+    Settings settings() {
+        return settings;
+    }
+
+    public Map<String, NestableInput> referenceImplementationTree() {
+        return referenceImplementationTree;
+    }
+
+    private Map<String, NestableInput> buildReferenceTree() {
+        Map<String, NestableInput> referenceMap = new HashMap<>(BUILT_IN_SETTINGS.size());
+        for (CrateSetting crateSetting : BUILT_IN_SETTINGS) {
+            if (crateSetting.isGroupSetting()) {
+                Map<String, Settings> settingsMap = initialSettings.getGroups(crateSetting.getKey(), true);
+                for (Map.Entry<String, Settings> entry : settingsMap.entrySet()) {
+                    buildGroupSettingReferenceTree(crateSetting.getKey(), entry.getKey(), entry.getValue(),
+                        referenceMap);
+                }
+            }
+            buildReferenceTree(referenceMap, crateSetting);
+        }
+        return referenceMap;
+    }
+
+    @VisibleForTesting
+    void buildGroupSettingReferenceTree(String prefix,
+                                        String settingKey,
+                                        Settings settingValue,
+                                        Map<String, NestableInput> referenceMap) {
+        //this is a nested setting
+        if (!settingValue.isEmpty()) {
+            //we need to build the reference tree for the current setting
+            buildReferenceTree(referenceMap,
+                CrateSetting.of(Setting.groupSetting(prefix + settingKey + ".",
+                    Setting.Property.NodeScope),
+                    DataTypes.OBJECT));
+            //build the reference tree for every child setting
+            for (String settingName : settingValue.keySet()) {
+                String nestedPrefix = prefix + settingKey + "." + settingName;
+
+                buildReferenceTree(referenceMap,
+                    CrateSetting.of(Setting.simpleString(nestedPrefix,
+                        Setting.Property.NodeScope),
+                        DataTypes.STRING));
+            }
+        }
+    }
+
+    private void buildReferenceTree(Map<String, NestableInput> referenceMap, CrateSetting<?> crateSetting) {
+        String fullName = crateSetting.setting().getKey();
+        List<String> parts = crateSetting.path();
+        int numParts = parts.size();
+        String name = parts.get(numParts - 1);
+        if (numParts == 1) {
+            // top level setting
+            referenceMap.put(fullName, new SettingExpression(this, crateSetting, fullName));
+        } else {
+            NestableInput nestableInput = new SettingExpression(this, crateSetting, name);
+
+            String topLevelName = parts.get(0);
+            NestedSettingExpression topLevelImpl = (NestedSettingExpression) referenceMap.get(topLevelName);
+            if (topLevelImpl == null) {
+                topLevelImpl = new NestedSettingExpression();
+                referenceMap.put(topLevelName, topLevelImpl);
+            }
+
+            // group settings have empty name, parent is created above
+            if (numParts == 2 && name.isEmpty() == false) {
+                topLevelImpl.putChildImplementation(name, nestableInput);
+            } else {
+                // find parent impl
+                NestedSettingExpression parentImpl = topLevelImpl;
+                for (int i = 1; i < numParts - 1; i++) {
+                    String currentName = parts.get(i);
+                    NestedSettingExpression current = (NestedSettingExpression) parentImpl.childImplementations().get(currentName);
+                    if (current == null) {
+                        current = new NestedSettingExpression();
+                        parentImpl.putChildImplementation(currentName, current);
+                    }
+                    parentImpl = current;
+                }
+                // group settings have empty name, parents are created above
+                if (name.isEmpty() == false) {
+                    parentImpl.putChildImplementation(name, nestableInput);
                 }
             }
         }
-        return settingNames;
+    }
+
+    static class SettingExpression implements NestableInput<Object> {
+        private final CrateSettings crateSettings;
+        private final CrateSetting<?> crateSetting;
+        private final String name;
+
+        SettingExpression(CrateSettings crateSettings, CrateSetting<?> crateSetting, String name) {
+            this.crateSettings = crateSettings;
+            this.crateSetting = crateSetting;
+            this.name = name;
+        }
+
+        public String name() {
+            return name;
+        }
+
+        @Override
+        public Object value() {
+            return crateSetting.dataType().value(crateSetting.setting().get(crateSettings.settings()));
+        }
+    }
+
+    @VisibleForTesting
+    static class NestedSettingExpression extends NestedObjectExpression {
+
+        void putChildImplementation(String name, NestableInput settingExpression) {
+            childImplementations.put(name, settingExpression);
+        }
+
+        public Map<String, NestableInput> childImplementations() {
+            return childImplementations;
+        }
     }
 }

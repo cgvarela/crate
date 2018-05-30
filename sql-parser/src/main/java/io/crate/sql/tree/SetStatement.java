@@ -21,28 +21,47 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 
+import java.util.Collections;
 import java.util.List;
 
 public class SetStatement extends Statement {
+
+    public enum Scope {
+        GLOBAL, SESSION, LOCAL, SESSION_TRANSACTION_MODE
+    }
 
     public enum SettingType {
         TRANSIENT, PERSISTENT
     }
 
+    private final Scope scope;
     private final SettingType settingType;
     private final List<Assignment> assignments;
 
-    public SetStatement(List<Assignment> assignments) {
-        this(SettingType.TRANSIENT, assignments);
+    public SetStatement(Scope scope, List<Assignment> assignments) {
+        this(scope, SettingType.TRANSIENT, assignments);
     }
 
-    public SetStatement(SettingType settingType, List<Assignment> assignments) {
+    public SetStatement(Scope scope, SettingType settingType, List<Assignment> assignments) {
         Preconditions.checkNotNull(assignments, "assignments are null");
+        this.scope = scope;
         this.settingType = settingType;
         this.assignments = assignments;
+    }
+
+    public SetStatement(Scope scope, Assignment assignment) {
+        Preconditions.checkNotNull(assignment, "assignment is null");
+        this.scope = scope;
+        this.settingType = SettingType.TRANSIENT;
+        this.assignments = Collections.singletonList(assignment);
+    }
+
+    public Scope scope() {
+        return scope;
     }
 
     public List<Assignment> assignments() {
@@ -55,15 +74,16 @@ public class SetStatement extends Statement {
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(assignments, settingType);
+        return Objects.hashCode(scope, assignments, settingType);
     }
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("assignments", assignments)
-                .add("settingType", settingType)
-                .toString();
+        return MoreObjects.toStringHelper(this)
+            .add("scope", scope)
+            .add("assignments", assignments)
+            .add("settingType", settingType)
+            .toString();
     }
 
     @Override
@@ -73,6 +93,7 @@ public class SetStatement extends Statement {
 
         SetStatement update = (SetStatement) o;
 
+        if (!scope.equals(update.scope)) return false;
         if (!assignments.equals(update.assignments)) return false;
         if (!settingType.equals(update.settingType)) return false;
 

@@ -21,14 +21,22 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 
 public class DropBlobTable extends Statement {
 
     private final Table table;
 
-    public DropBlobTable(Table table) {
+    private final boolean ignoreNonExistentTable;
+
+    public DropBlobTable(Table table, boolean ignoreNonExistentTable) {
         this.table = table;
+        this.ignoreNonExistentTable = ignoreNonExistentTable;
+    }
+
+    public boolean ignoreNonExistentTable() {
+        return ignoreNonExistentTable;
     }
 
     public Table table() {
@@ -42,23 +50,31 @@ public class DropBlobTable extends Statement {
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this).add("table", table).toString();
+        return MoreObjects.toStringHelper(this)
+            .add("table", table)
+            .add("ignoreNonExistentTable", ignoreNonExistentTable)
+            .toString();
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
 
         DropBlobTable that = (DropBlobTable) o;
+        if (this.ignoreNonExistentTable != that.ignoreNonExistentTable) {
+            return false;
+        }
+        return table.equals(that.table);
 
-        if (!table.equals(that.table)) return false;
-
-        return true;
     }
 
     @Override
     public int hashCode() {
-        return table.hashCode();
+        return Objects.hashCode(table, ignoreNonExistentTable);
     }
 }

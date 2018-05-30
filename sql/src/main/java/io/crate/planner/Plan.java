@@ -1,70 +1,50 @@
 /*
- * Licensed to CRATE Technology GmbH ("Crate") under one or more contributor
- * license agreements.  See the NOTICE file distributed with this work for
- * additional information regarding copyright ownership.  Crate licenses
- * this file to you under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.  You may
+ * Licensed to Crate under one or more contributor license agreements.
+ * See the NOTICE file distributed with this work for additional
+ * information regarding copyright ownership.  Crate licenses this file
+ * to you under the Apache License, Version 2.0 (the "License"); you may
+ * not use this file except in compliance with the License.  You may
  * obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
- * License for the specific language governing permissions and limitations
- * under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ * implied.  See the License for the specific language governing
+ * permissions and limitations under the License.
  *
  * However, if you have executed another commercial license agreement
  * with Crate these terms will supersede the license and you may use the
- * software solely pursuant to the terms of the relevant commercial agreement.
+ * software solely pursuant to the terms of the relevant commercial
+ * agreement.
  */
 
 package io.crate.planner;
 
-import com.google.common.collect.ImmutableList;
-import io.crate.planner.node.PlanNode;
-import io.crate.types.DataType;
+import io.crate.data.Row;
+import io.crate.data.RowConsumer;
+import io.crate.planner.operators.SubQueryResults;
 
-import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
-public class Plan implements Iterable<PlanNode> {
+/**
+ * Representation of a complete top-level plan which can be consumed by an {@link io.crate.executor.Executor}.
+ */
+public interface Plan {
 
-    private ArrayList<PlanNode> nodes = new ArrayList<>();
-    private boolean expectsAffectedRows = false;
+    void execute(DependencyCarrier executor,
+                 PlannerContext plannerContext,
+                 RowConsumer consumer,
+                 Row params,
+                 SubQueryResults subQueryResults);
 
-    public void add(PlanNode node) {
-        nodes.add(node);
-    }
-
-    @Override
-    public Iterator<PlanNode> iterator() {
-        return nodes.iterator();
-    }
-
-    public void expectsAffectedRows(boolean expectsAffectedRows) {
-        this.expectsAffectedRows = expectsAffectedRows;
-    }
-
-    public boolean expectsAffectedRows() {
-        return expectsAffectedRows;
-    }
-
-    /**
-     * @return a list of {@linkplain io.crate.types.DataType}s
-     *         that the output columns of a response created from a successful execution
-     *         of this plan will have.
-     *         Returns an empty list of there are no output columns.
-     */
-    public List<DataType> outputTypes() {
-        if (nodes.isEmpty() || expectsAffectedRows) {
-            return ImmutableList.of();
-        }
-        return nodes.get(nodes.size() -1).outputTypes();
-    }
-
-    public boolean isEmpty() {
-        return nodes.isEmpty();
+    default List<CompletableFuture<Long>> executeBulk(DependencyCarrier executor,
+                                                      PlannerContext plannerContext,
+                                                      List<Row> bulkParams,
+                                                      SubQueryResults subQueryResults) {
+        throw new UnsupportedOperationException(
+            "Bulk operation not supported for " + this.getClass().getSimpleName());
     }
 }

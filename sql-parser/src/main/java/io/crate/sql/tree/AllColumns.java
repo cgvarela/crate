@@ -1,4 +1,4 @@
- /*
+/*
  * Licensed to CRATE Technology GmbH ("Crate") under one or more contributor
  * license agreements.  See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership.  Crate licenses
@@ -21,39 +21,34 @@
 
 package io.crate.sql.tree;
 
-import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 
-public class AllColumns
-        extends SelectItem
-{
+import java.util.Optional;
+
+public class AllColumns extends SelectItem {
+
     private final Optional<QualifiedName> prefix;
 
-    public AllColumns()
-    {
-        prefix = Optional.absent();
+    public AllColumns() {
+        prefix = Optional.empty();
     }
 
-    public AllColumns(QualifiedName prefix)
-    {
+    public AllColumns(QualifiedName prefix) {
         Preconditions.checkNotNull(prefix, "prefix is null");
         this.prefix = Optional.of(prefix);
     }
 
-    public Optional<QualifiedName> getPrefix()
-    {
+    public Optional<QualifiedName> getPrefix() {
         return prefix;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitAllColumns(this, context);
     }
 
     @Override
-    public boolean equals(Object o)
-    {
+    public boolean equals(Object o) {
         if (this == o) {
             return true;
         }
@@ -71,14 +66,12 @@ public class AllColumns
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return prefix != null ? prefix.hashCode() : 0;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         if (prefix.isPresent()) {
             return prefix.get() + ".*";
         }

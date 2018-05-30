@@ -22,31 +22,49 @@
 package io.crate.metadata.settings;
 
 import com.google.common.base.Joiner;
-import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.settings.Settings;
 
+import javax.annotation.Nullable;
+import java.util.Locale;
 import java.util.Set;
 
-public abstract class StringSetting extends Setting<String, String> {
+public class StringSetting extends Setting<String, String> {
 
-    protected Set<String> allowedValues;
+    private final String name;
+    final Set<String> allowedValues;
 
-    protected StringSetting(Set<String> allowedValues) {
+    @Nullable
+    private final String defaultValue;
+
+    public StringSetting(String name,
+                         @Nullable Set<String> allowedValues,
+                         @Nullable String defaultValue) {
+
+        this.name = name;
         this.allowedValues = allowedValues;
+        this.defaultValue = defaultValue;
     }
 
-    protected StringSetting() {
-        this.allowedValues = null;
+    public StringSetting(String name, @javax.annotation.Nullable Set<String> allowedValues) {
+        this(name, allowedValues, null);
+    }
+
+    public StringSetting(String name) {
+        this(name, null, null);
+    }
+
+    @Override
+    public String name() {
+        return name;
     }
 
     @Override
     public String defaultValue() {
-        return "";
+        return defaultValue;
     }
 
-    @Override
     public String extract(Settings settings) {
-        return settings.get(settingName(), defaultValue());
+        return settings.get(name, defaultValue());
     }
 
     /**
@@ -55,8 +73,8 @@ public abstract class StringSetting extends Setting<String, String> {
     @Nullable
     public String validate(String value) {
         if (allowedValues != null && !allowedValues.contains(value)) {
-            return String.format("'%s' is not an allowed value. Allowed values are: %s",
-                    value, Joiner.on(", ").join(allowedValues)
+            return String.format(Locale.ENGLISH, "'%s' is not an allowed value. Allowed values are: %s",
+                value, Joiner.on(", ").join(allowedValues)
 
             );
         }

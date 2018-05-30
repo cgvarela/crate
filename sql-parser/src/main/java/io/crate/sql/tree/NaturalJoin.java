@@ -21,14 +21,12 @@
 
 package io.crate.sql.tree;
 
-import com.google.common.base.Objects;
+import com.google.common.base.MoreObjects;
 
 public class NaturalJoin
-        extends JoinCriteria
-{
+    extends JoinCriteria {
     @Override
-    public boolean equals(Object obj)
-    {
+    public boolean equals(Object obj) {
         if (this == obj) {
             return true;
         }
@@ -36,14 +34,12 @@ public class NaturalJoin
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return 0;
     }
 
     @Override
-    public String toString()
-    {
-        return Objects.toStringHelper(this).toString();
+    public String toString() {
+        return MoreObjects.toStringHelper(this).toString();
     }
 }

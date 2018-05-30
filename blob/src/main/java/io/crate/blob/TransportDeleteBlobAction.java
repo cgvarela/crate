@@ -21,49 +21,42 @@
 
 package io.crate.blob;
 
-import io.crate.blob.v2.BlobIndices;
+import io.crate.blob.v2.BlobIndicesService;
 import io.crate.blob.v2.BlobShard;
-import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.action.support.replication.TransportShardReplicationOperationAction;
-import org.elasticsearch.cluster.ClusterService;
-import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.action.support.ActionFilters;
+import org.elasticsearch.action.support.replication.TransportReplicationAction;
 import org.elasticsearch.cluster.action.shard.ShardStateAction;
-import org.elasticsearch.cluster.block.ClusterBlockException;
-import org.elasticsearch.cluster.block.ClusterBlockLevel;
+import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.routing.ShardIterator;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
-public class TransportDeleteBlobAction extends TransportShardReplicationOperationAction<DeleteBlobRequest, DeleteBlobRequest,
-        DeleteBlobResponse> {
+public class TransportDeleteBlobAction extends TransportReplicationAction<DeleteBlobRequest, DeleteBlobRequest,
+    DeleteBlobResponse> {
 
-    private final BlobIndices blobIndices;
+    private final BlobIndicesService blobIndicesService;
 
     @Inject
     public TransportDeleteBlobAction(Settings settings,
-            TransportService transportService,
-            ClusterService clusterService,
-            IndicesService indicesService,
-            ThreadPool threadPool,
-            ShardStateAction shardStateAction,
-            BlobIndices blobIndices
-                                    ) {
-        super(settings, DeleteBlobAction.NAME, transportService, clusterService, indicesService, threadPool, shardStateAction);
-        this.blobIndices = blobIndices;
+                                     TransportService transportService,
+                                     ClusterService clusterService,
+                                     IndicesService indicesService,
+                                     ThreadPool threadPool,
+                                     ShardStateAction shardStateAction,
+                                     BlobIndicesService blobIndicesService,
+                                     ActionFilters actionFilters,
+                                     IndexNameExpressionResolver indexNameExpressionResolver) {
+        super(settings, DeleteBlobAction.NAME, transportService, clusterService, indicesService,
+            threadPool, shardStateAction, actionFilters, indexNameExpressionResolver, DeleteBlobRequest::new,
+            DeleteBlobRequest::new, ThreadPool.Names.INDEX);
+        this.blobIndicesService = blobIndicesService;
         logger.trace("Constructor");
-    }
-
-    @Override
-    protected DeleteBlobRequest newRequestInstance() {
-        return new DeleteBlobRequest();
-    }
-
-    @Override
-    protected DeleteBlobRequest newReplicaRequestInstance() {
-        return new DeleteBlobRequest();
     }
 
     @Override
@@ -72,51 +65,33 @@ public class TransportDeleteBlobAction extends TransportShardReplicationOperatio
     }
 
     @Override
-    protected String executor() {
-        return ThreadPool.Names.INDEX;
-    }
-
-    @Override
-    protected PrimaryResponse<DeleteBlobResponse, DeleteBlobRequest> shardOperationOnPrimary(ClusterState clusterState,
-            PrimaryOperationRequest shardRequest) {
-        logger.trace("shardOperationOnPrimary {}", shardRequest);
-        final DeleteBlobRequest request = shardRequest.request;
-        BlobShard blobShard = blobIndices.blobShardSafe(shardRequest.request.index(), shardRequest.shardId);
+    protected PrimaryResult shardOperationOnPrimary(DeleteBlobRequest request, IndexShard primary) throws Exception {
+        logger.trace("shardOperationOnPrimary {}", request);
+        BlobShard blobShard = blobIndicesService.blobShardSafe(request.shardId());
         boolean deleted = blobShard.delete(request.id());
         final DeleteBlobResponse response = new DeleteBlobResponse(deleted);
-        return new PrimaryResponse<>(request, response, null);
+        return new PrimaryResult(request, response);
     }
 
     @Override
-    protected void shardOperationOnReplica(ReplicaOperationRequest shardRequest) {
-        logger.warn("shardOperationOnReplica operating on replica but relocation is not implemented {}", shardRequest);
-        BlobShard blobShard = blobIndices.blobShardSafe(shardRequest.request.index(), shardRequest.shardId);
-        blobShard.delete(shardRequest.request.id());
+    protected ReplicaResult shardOperationOnReplica(DeleteBlobRequest request, IndexShard replica) {
+        logger.warn("shardOperationOnReplica operating on replica but relocation is not implemented {}", request);
+        BlobShard blobShard = blobIndicesService.blobShardSafe(request.shardId());
+        blobShard.delete(request.id());
+        return new ReplicaResult();
     }
 
     @Override
-    protected ShardIterator shards(ClusterState clusterState, DeleteBlobRequest request) throws ElasticsearchException {
-        return clusterService.operationRouting()
-                .indexShards(clusterService.state(),
-                        request.index(),
-                        null,
-                        null,
-                        request.id());
+    protected void resolveRequest(IndexMetaData indexMetaData, DeleteBlobRequest request) {
+        ShardIterator shardIterator = clusterService.operationRouting()
+            .indexShards(clusterService.state(), request.index(), request.id(), null);
+        request.setShardId(shardIterator.shardId());
+        super.resolveRequest(indexMetaData, request);
     }
 
     @Override
-    protected boolean checkWriteConsistency() {
-        return true;
-    }
-
-    @Override
-    protected ClusterBlockException checkGlobalBlock(ClusterState state, DeleteBlobRequest request) {
-        return state.blocks().globalBlockedException(ClusterBlockLevel.WRITE);
-    }
-
-    @Override
-    protected ClusterBlockException checkRequestBlock(ClusterState state, DeleteBlobRequest request) {
-        return state.blocks().indexBlockedException(ClusterBlockLevel.WRITE, request.index());
+    protected boolean resolveIndex() {
+        return false;
     }
 }
 

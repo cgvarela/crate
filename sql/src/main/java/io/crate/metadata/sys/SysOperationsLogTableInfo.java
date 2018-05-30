@@ -21,68 +21,75 @@
 
 package io.crate.metadata.sys;
 
-import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import io.crate.action.sql.SessionContext;
 import io.crate.analyze.WhereClause;
-import io.crate.metadata.*;
-import io.crate.planner.RowGranularity;
-import io.crate.types.DataType;
+import io.crate.metadata.ColumnIdent;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.Routing;
+import io.crate.metadata.RoutingProvider;
+import io.crate.metadata.RowContextCollectorExpression;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.expressions.RowCollectExpressionFactory;
+import io.crate.metadata.table.ColumnRegistrar;
+import io.crate.metadata.table.StaticTableInfo;
+import io.crate.expression.reference.sys.operation.OperationContextLog;
 import io.crate.types.DataTypes;
-import org.elasticsearch.cluster.ClusterService;
-import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.cluster.ClusterState;
 
-import javax.annotation.Nullable;
-import java.util.*;
+import java.util.Collections;
+import java.util.Map;
 
-public class SysOperationsLogTableInfo extends SysTableInfo {
+public class SysOperationsLogTableInfo extends StaticTableInfo {
 
-    public static class ColumnNames {
-        public static final String JOB_ID = "job_id";
-        public static final String NAME = "name";
-        public static final String STARTED = "started";
-        public static final String ENDED = "ended";
-        public static final String ERROR = "error";
+    public static class Columns {
+        public static final ColumnIdent ID = new ColumnIdent("id");
+        static final ColumnIdent JOB_ID = new ColumnIdent("job_id");
+        public static final ColumnIdent NAME = new ColumnIdent("name");
+        public static final ColumnIdent STARTED = new ColumnIdent("started");
+        static final ColumnIdent ENDED = new ColumnIdent("ended");
+        static final ColumnIdent USED_BYTES = new ColumnIdent("used_bytes");
+        public static final ColumnIdent ERROR = new ColumnIdent("error");
     }
 
-    public static final TableIdent IDENT = new TableIdent(SCHEMA, "operations_log");
-    private static final String[] INDICES = new String[] { IDENT.name() };
-    private static final Map<ColumnIdent, ReferenceInfo> COLUMNS_INFO = new LinkedHashMap<>();
-    private static final LinkedHashSet<ReferenceInfo> columns = new LinkedHashSet<>();
+    public static final RelationName IDENT = new RelationName(SysSchemaInfo.NAME, "operations_log");
 
-
-    private static ReferenceInfo register(String column, DataType type) {
-        ReferenceInfo info = new ReferenceInfo(new ReferenceIdent(IDENT, column), RowGranularity.DOC, type);
-        columns.add(info);
-        COLUMNS_INFO.put(info.ident().columnIdent(), info);
-        return info;
+    public static Map<ColumnIdent, RowCollectExpressionFactory<OperationContextLog>> expressions() {
+        return ImmutableMap.<ColumnIdent, RowCollectExpressionFactory<OperationContextLog>>builder()
+            .put(SysOperationsLogTableInfo.Columns.ID,
+                () -> RowContextCollectorExpression.objToBytesRef(OperationContextLog::id))
+            .put(SysOperationsLogTableInfo.Columns.JOB_ID,
+                () -> RowContextCollectorExpression.objToBytesRef(OperationContextLog::jobId))
+            .put(SysOperationsLogTableInfo.Columns.NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(OperationContextLog::name))
+            .put(SysOperationsLogTableInfo.Columns.STARTED,
+                () -> RowContextCollectorExpression.forFunction(OperationContextLog::started))
+            .put(SysOperationsLogTableInfo.Columns.USED_BYTES, () -> new RowContextCollectorExpression<OperationContextLog, Long>() {
+                @Override
+                public Long value() {
+                    long usedBytes = row.usedBytes();
+                    if (usedBytes == 0) {
+                        return null;
+                    }
+                    return usedBytes;
+                }
+            })
+            .put(SysOperationsLogTableInfo.Columns.ERROR,
+                () -> RowContextCollectorExpression.objToBytesRef(OperationContextLog::errorMessage))
+            .put(SysOperationsLogTableInfo.Columns.ENDED,
+                () -> RowContextCollectorExpression.forFunction(OperationContextLog::ended))
+            .build();
     }
 
-    static {
-        register(ColumnNames.JOB_ID, DataTypes.STRING);
-        register(ColumnNames.NAME, DataTypes.STRING);
-        register(ColumnNames.STARTED, DataTypes.TIMESTAMP);
-        register(ColumnNames.ENDED, DataTypes.TIMESTAMP);
-        register(ColumnNames.ERROR, DataTypes.STRING);
-    }
-
-    @Inject
-    protected SysOperationsLogTableInfo(ClusterService clusterService, SysSchemaInfo sysSchemaInfo) {
-        super(clusterService, sysSchemaInfo);
-    }
-
-    @Nullable
-    @Override
-    public ReferenceInfo getReferenceInfo(ColumnIdent columnIdent) {
-        return columnInfo(columnIdent);
-    }
-
-    @Nullable
-    public static ReferenceInfo columnInfo(ColumnIdent ident) {
-        return COLUMNS_INFO.get(ident);
-    }
-
-    @Override
-    public Collection<ReferenceInfo> columns() {
-        return columns;
+    SysOperationsLogTableInfo() {
+        super(IDENT, new ColumnRegistrar(IDENT, RowGranularity.DOC)
+            .register(Columns.ID, DataTypes.STRING)
+            .register(Columns.JOB_ID, DataTypes.STRING)
+            .register(Columns.NAME, DataTypes.STRING)
+            .register(Columns.STARTED, DataTypes.TIMESTAMP)
+            .register(Columns.ENDED, DataTypes.TIMESTAMP)
+            .register(Columns.USED_BYTES, DataTypes.LONG)
+            .register(Columns.ERROR, DataTypes.STRING), Collections.emptyList());
     }
 
     @Override
@@ -91,27 +98,16 @@ public class SysOperationsLogTableInfo extends SysTableInfo {
     }
 
     @Override
-    public TableIdent ident() {
+    public RelationName ident() {
         return IDENT;
     }
 
     @Override
-    public Routing getRouting(WhereClause whereClause) {
-        return tableRouting(whereClause);
-    }
-
-    @Override
-    public List<ColumnIdent> primaryKey() {
-        return ImmutableList.of();
-    }
-
-    @Override
-    public String[] concreteIndices() {
-        return INDICES;
-    }
-
-    @Override
-    public Iterator<ReferenceInfo> iterator() {
-        return COLUMNS_INFO.values().iterator();
+    public Routing getRouting(ClusterState clusterState,
+                              RoutingProvider routingProvider,
+                              WhereClause whereClause,
+                              RoutingProvider.ShardSelection shardSelection,
+                              SessionContext sessionContext) {
+        return Routing.forTableOnAllNodes(IDENT, clusterState.getNodes());
     }
 }

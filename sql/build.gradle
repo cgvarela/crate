@@ -1,104 +1,75 @@
-apply plugin: 'idea'
-apply plugin: 'java'
+apply from: "$rootDir/gradle/javaModule.gradle"
+apply plugin: 'groovy'
 
 archivesBaseName = 'crate-sql'
 
-// we do not want to have elasticsearch here, since we provide it in :es
 configurations {
-    all*.exclude group: 'org.elasticsearch'
-    sharedCompile.extendsFrom compile
+    // export of test so that other modules can use the utilities there as well.
+    testOutput
 }
 
 dependencies {
-    compile project(':es')
+    compile project(':shared')
     compile project(':core')
+    compile project(':dex')
     compile project(':blob')
     compile project(':sql-parser')
-    compile 'com.amazonaws:aws-java-sdk:1.7.5'
+    compile project(':udc')
+    compile project(':ssl')
+    compile "io.netty:netty-transport:${versions.netty4}"
+    compile "io.netty:netty-codec:${versions.netty4}"
+    compile "io.netty:netty-buffer:${versions.netty4}"
+    compile "com.google.guava:guava:${versions.guava}"
+    compile "com.amazonaws:aws-java-sdk-s3:${versions.aws}"
+    compile "org.apache.commons:commons-math3:${versions.commonsmath}"
+    compile "com.fasterxml.jackson.dataformat:jackson-dataformat-csv:${versions.jacksondataformatcsv}"
+    compile "com.fasterxml.jackson.core:jackson-databind:${versions.jacksondatabind}"
+    // Needed by aws-java-sdk-s3 in Java 9
+    compile "javax.xml.bind:jaxb-api:${versions.jaxb_api}"
 
-    testCompile project(':testing')
-    testCompile 'org.skyscreamer:jsonassert:1.2.0'
-    testCompile 'com.h2database:h2:1.3.173'
+    testCompile project(':integration-testing')
+    testCompile project(path: ':dex', configuration: 'testOutput')
+    testCompile 'org.skyscreamer:jsonassert:1.3.0'
+    testCompile "org.hamcrest:hamcrest-all:${versions.hamcrest}"
+    testCompile "org.slf4j:slf4j-api:${versions.slf4j}"
+    testCompile("io.crate:crate-jdbc:${versions.crate_jdbc}") {
+        exclude group: 'net.java.dev.jna', module: 'jna'
+        exclude group: 'commons-logging', module: 'commons-logging'
+        exclude group: 'org.slf4j', module: 'jcl-over-slf4j'
+    }
+    // These plugins are dynamically loaded and need to be present here.
+    // They are required by 1) tests in :sql 2) modules depending on :sql.
+    // They also need to be added in :app because :sql is declared non-transitive
+    // in :app (=dependencies of :sql won't be included).
+    compile project(":es:es-repository-url")
+    compile project(":es:es-analysis-common")
+}
+//noinspection GroovyAssignabilityCheck
+task testOutputJar (type: Jar) {
+    classifier = 'sql-testing'
+    from sourceSets.test.output
 }
 
-buildscript {
-    repositories {
-        mavenCentral()
-    }
+artifacts {
+    testOutput testOutputJar
 }
 
 test {
-    testLogging {
-        // show standard out and standard error of the test JVM(s) on the console
-        showStandardStreams = true
-        exceptionFormat = 'full'
-        // Show that tests are run in the command-line output
-        events 'started', 'passed'
-    }
-    // force run, see: http://gradle.1045684.n5.nabble.com/how-does-gradle-decide-when-to-run-tests-td3314172.html
-    outputs.upToDateWhen { false }
+    testLogging.exceptionFormat = 'full'
+    outputs.dir("$projectDir/data")
 
-    exclude('io/crate/module/sql/benchmark/**')
+    jacoco.excludes = ["*Test*"]
 
-    // allow to set the number of test forks from the CLI
-    if (project.hasProperty('testForks')) {
-        maxParallelForks = project.testForks as int
-    }
-
-    jacoco {
-        excludes = [
-            "*Test*",
-            "*Benchmark*"
-        ]
-    }
+    // make sure sources are first on classpath because we do override some class(es) (currently: lucene's AssertingLeafReader)
+    classpath = sourceSets.main.output + sourceSets.test.output + configurations.testCompile
 }
 
-
-task bench(type: Test) {
-    description = 'Run the Crate JUnit Benchmarks'
-    group = 'crate'
-
-    def benchmark_dir = project.buildDir.path + '/reports/bench/'
-
-    // Properties for JUnit Benchmarks
-    systemProperty 'jub.consumers', 'CONSOLE,H2,XML'
-    systemProperty 'jub.db.file', benchmark_dir + 'results'
-    systemProperty 'jub.xml.file', benchmark_dir + 'results.xml'
-    systemProperty 'jub.charts.dir', benchmark_dir
-
-    include('io/crate/module/sql/benchmark/**')
-
-    testLogging {
-        // show standard out and standard error of the test JVM(s) on the console
-        showStandardStreams = true
-
-        // Show that tests are run in the command-line output
-        events 'started', 'passed'
-    }
-    // force run, see: http://gradle.1045684.n5.nabble.com/how-does-gradle-decide-when-to-run-tests-td3314172.html
-    outputs.upToDateWhen { false }
-
-    doLast {
-        println "Benchmark Results in " + benchmark_dir
-    }
-}
-
+clean.dependsOn('cleanTest')
 
 sourceSets {
     test {
         resources {
-            srcDir 'src/test/java'
-            include '**/*.rst'
-            include '**/*.json'
-            include '**/*.sql'
-            include '**/*.html'
-            include '**/*.jsonp'
-        }
-    }
-    shared {
-        java {
-            srcDir "src/main/java/"
-            include "io/crate/action/sql/SQL*"
+            srcDir 'src/test/resources'
         }
     }
 }

@@ -21,8 +21,9 @@
 
 package io.crate.types;
 
-import com.carrotsearch.ant.tasks.junit4.dependencies.com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Sets;
+import io.crate.test.integration.CrateUnitTest;
 import org.apache.lucene.util.BytesRef;
 import org.junit.Test;
 
@@ -30,12 +31,14 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
+import static org.apache.commons.lang3.ObjectUtils.firstNonNull;
+import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThat;
+import static org.hamcrest.core.IsNot.not;
 
-public class DataTypesTest {
+public class DataTypesTest extends CrateUnitTest {
 
     @Test
     public void testConvertBooleanToString() {
@@ -60,24 +63,43 @@ public class DataTypesTest {
     public void testLongToNumbers() {
         Long longValue = 123L;
 
-        assertEquals((Long)123L, DataTypes.LONG.value((longValue)));
-        assertEquals((Integer)123, DataTypes.INTEGER.value(longValue));
-        assertEquals((Double)123.0d, DataTypes.DOUBLE.value(longValue));
-        assertEquals((Float)123.0f, DataTypes.FLOAT.value(longValue));
-        assertEquals((Short)(short)123, DataTypes.SHORT.value(longValue));
-        assertEquals((Byte)(byte)123, DataTypes.BYTE.value(longValue));
-        assertEquals((Long)123L, DataTypes.TIMESTAMP.value(longValue));
+        assertEquals((Long) 123L, DataTypes.LONG.value((longValue)));
+        assertEquals((Integer) 123, DataTypes.INTEGER.value(longValue));
+        assertEquals((Double) 123.0d, DataTypes.DOUBLE.value(longValue));
+        assertEquals((Float) 123.0f, DataTypes.FLOAT.value(longValue));
+        assertEquals((Short) (short) 123, DataTypes.SHORT.value(longValue));
+        assertEquals((Byte) (byte) 123, DataTypes.BYTE.value(longValue));
+        assertEquals((Long) 123L, DataTypes.TIMESTAMP.value(longValue));
         assertEquals(new BytesRef("123"), DataTypes.STRING.value(longValue));
     }
 
-    private static Map<String, Object> testMap = new HashMap<String, Object>(){{
+    @Test
+    public void testConvertArrayToSet() throws Exception {
+        ArrayType longArray = new ArrayType(DataTypes.LONG);
+        SetType longSet = new SetType(DataTypes.LONG);
+
+        assertThat(longArray.isConvertableTo(longSet), is(true));
+        assertThat(longSet.value(new Object[]{1L, 2L}), is((Set) Sets.newHashSet(1L, 2L)));
+        assertThat(longSet.value(Arrays.asList(1L, 2L)), is((Set) Sets.newHashSet(1L, 2L)));
+    }
+
+    @Test
+    public void testConvertSetToArray() throws Exception {
+        ArrayType longArray = new ArrayType(DataTypes.LONG);
+        SetType longSet = new SetType(DataTypes.LONG);
+
+        assertThat(longSet.isConvertableTo(longArray), is(true));
+        assertThat(longArray.value(Sets.newHashSet(1L, 2L)), is(new Object[]{1L, 2L}));
+    }
+
+    private static Map<String, Object> testMap = new HashMap<String, Object>() {{
         put("int", 1);
         put("boolean", false);
         put("double", 2.8d);
         put("list", Arrays.asList(1, 3, 4));
     }};
 
-    private static Map<String, Object> testCompareMap = new HashMap<String, Object>(){{
+    private static Map<String, Object> testCompareMap = new HashMap<String, Object>() {{
         put("int", 2);
         put("boolean", true);
         put("double", 2.9d);
@@ -89,7 +111,7 @@ public class DataTypesTest {
         assertThat(DataTypes.OBJECT.value(testMap), is(testMap));
     }
 
-    @Test( expected = ClassCastException.class)
+    @Test(expected = ClassCastException.class)
     public void testMapToBoolean() {
         DataTypes.BOOLEAN.value(testMap);
     }
@@ -181,8 +203,8 @@ public class DataTypesTest {
 
     @Test
     public void testConvertStringsToTimestamp() {
-        assertEquals((Long)1393555173000L, DataTypes.TIMESTAMP.value("2014-02-28T02:39:33"));
-        assertEquals((Long)1393545600000L, DataTypes.TIMESTAMP.value("2014-02-28"));
+        assertEquals((Long) 1393555173000L, DataTypes.TIMESTAMP.value("2014-02-28T02:39:33"));
+        assertEquals((Long) 1393545600000L, DataTypes.TIMESTAMP.value("2014-02-28"));
     }
 
     @Test(expected = NumberFormatException.class)
@@ -224,5 +246,77 @@ public class DataTypesTest {
     @Test(expected = ClassCastException.class)
     public void testConvertBooleanToByte() {
         DataTypes.BYTE.value(true);
+    }
+
+    @Test
+    public void testLongTypeCompareValueToWith() {
+        assertCompareValueTo(DataTypes.LONG, null, null, 0);
+        assertCompareValueTo(null, 2L, -1);
+        assertCompareValueTo(3L, 2L, 1);
+        assertCompareValueTo(2L, 2L, 0);
+        assertCompareValueTo(2L, null, 1);
+    }
+
+    @Test
+    public void testShortTypeCompareValueToWith() {
+        assertCompareValueTo(DataTypes.LONG, null, null, 0);
+        assertCompareValueTo(null, (short) 2, -1);
+        assertCompareValueTo((short) 3, (short) 2, 1);
+        assertCompareValueTo((short) 2, (short) 2, 0);
+        assertCompareValueTo((short) 2, null, 1);
+    }
+
+    @Test
+    public void testIntTypeCompareValueTo() {
+        assertCompareValueTo(DataTypes.INTEGER, null, null, 0);
+        assertCompareValueTo(null, 2, -1);
+        assertCompareValueTo(3, 2, 1);
+        assertCompareValueTo(2, 2, 0);
+        assertCompareValueTo(2, null, 1);
+    }
+
+    @Test
+    public void testDoubleTypeCompareValueTo() {
+        assertCompareValueTo(DataTypes.DOUBLE, null, null, 0);
+        assertCompareValueTo(null, 2.0d, -1);
+        assertCompareValueTo(3.0d, 2.0d, 1);
+        assertCompareValueTo(2.0d, 2.0d, 0);
+        assertCompareValueTo(2.0d, null, 1);
+    }
+
+    @Test
+    public void testFloatTypeCompareValueTo() {
+        assertCompareValueTo(DataTypes.FLOAT, null, null, 0);
+        assertCompareValueTo(null, 2.0f, -1);
+        assertCompareValueTo(2.0f, 3.0f, -1);
+        assertCompareValueTo(2.0f, 2.0f, 0);
+        assertCompareValueTo(2.0f, null, 1);
+    }
+
+    @Test
+    public void testByteTypeCompareValueTo() {
+        assertCompareValueTo(DataTypes.BYTE, null, null, 0);
+        assertCompareValueTo(null, (byte) 2, -1);
+        assertCompareValueTo((byte) 3, (byte) 2, 1);
+        assertCompareValueTo((byte) 2, (byte) 2, 0);
+        assertCompareValueTo((byte) 2, null, 1);
+    }
+
+    @Test
+    public void testBooleanTypeCompareValueTo() {
+        assertCompareValueTo(DataTypes.BOOLEAN, null, null, 0);
+        assertCompareValueTo(null, true, -1);
+        assertCompareValueTo(true, false, 1);
+        assertCompareValueTo(true, null, 1);
+    }
+
+    private static void assertCompareValueTo(Object val1, Object val2, int expected) {
+        DataType type = DataTypes.guessType(firstNonNull(val1, val2));
+        assertThat(type, not(instanceOf(DataTypes.UNDEFINED.getClass())));
+        assertCompareValueTo(type, val1, val2, expected);
+    }
+
+    private static void assertCompareValueTo(DataType dt, Object val1, Object val2, int expected) {
+        assertThat(dt.compareValueTo(dt.value(val1), dt.value(val2)), is(expected));
     }
 }

@@ -21,65 +21,90 @@
 
 package io.crate.integrationtests;
 
-import com.google.common.base.Joiner;
 import io.crate.action.sql.SQLActionException;
-import io.crate.action.sql.SQLResponse;
-import io.crate.blob.v2.BlobIndices;
-import io.crate.test.integration.ClassLifecycleIntegrationTest;
-import io.crate.testing.SQLTransportExecutor;
+import io.crate.metadata.PartitionName;
+import io.crate.testing.SQLResponse;
+import io.crate.testing.TestingHelpers;
+import org.apache.lucene.util.Version;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
-import org.elasticsearch.common.settings.ImmutableSettings;
-import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.cluster.metadata.MetaData;
+import org.elasticsearch.cluster.service.ClusterService;
+import org.elasticsearch.test.ESIntegTestCase;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import static io.crate.testing.TestingHelpers.resolveCanonicalString;
+import static org.hamcrest.Matchers.arrayContaining;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.endsWith;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
-import static org.junit.Assert.*;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
 
-public class SysShardsTest extends ClassLifecycleIntegrationTest {
-
-    private static boolean dataInitialized = false;
-    private static SQLTransportExecutor transportExecutor;
-
-    @Rule
-    public ExpectedException expectedException = ExpectedException.none();
+@ESIntegTestCase.ClusterScope(numClientNodes = 0, numDataNodes = 2, supportsDedicatedMasters = false)
+public class SysShardsTest extends SQLTransportIntegrationTest {
 
     @Before
     public void initTestData() throws Exception {
-        synchronized (SysShardsTest.class) {
-            if (dataInitialized) {
-                return;
-            }
-            transportExecutor = SQLTransportExecutor.create(ClassLifecycleIntegrationTest.GLOBAL_CLUSTER);
-            Setup setup = new Setup(transportExecutor);
-            setup.groupBySetup();
-            transportExecutor.exec(
-                "create table quotes (id integer primary key, quote string) with(number_of_replicas=1)");
-            BlobIndices blobIndices = GLOBAL_CLUSTER.getInstance(BlobIndices.class);
-            Settings indexSettings = ImmutableSettings.builder()
-                    .put(IndexMetaData.SETTING_NUMBER_OF_REPLICAS, 1)
-                    .put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, 5)
-                    .build();
-            blobIndices.createBlobTable("blobs", indexSettings);
-            transportExecutor.ensureGreen();
-            dataInitialized = true;
-        }
+        Setup setup = new Setup(sqlExecutor);
+        setup.groupBySetup();
+        execute("create table quotes (id integer primary key, quote string) with (number_of_replicas=1)");
+        execute("create blob table blobs clustered into 5 shards with (number_of_replicas=1)");
+        ensureGreen();
+    }
+
+    @Test
+    public void testPathAndBlobPath() throws Exception {
+        Path blobs = createTempDir("blobs");
+        execute("create table t1 (x int) clustered into 1 shards with (number_of_replicas = 0)");
+        execute("create blob table b1 clustered into 1 shards with (number_of_replicas = 0)");
+        execute("create blob table b2 " +
+                "clustered into 1 shards with (number_of_replicas = 0, blobs_path = '" + blobs.toString() + "')");
+        ensureYellow();
+
+        execute("select path, blob_path from sys.shards where table_name in ('t1', 'b1', 'b2') " +
+                "order by table_name asc");
+        // b1
+        // path + /blobs == blob_path without custom blob path
+        assertThat(response.rows()[0][0] + resolveCanonicalString("/blobs"), is(response.rows()[0][1]));
+
+        ClusterService clusterService = internalCluster().getInstance(ClusterService.class);
+        MetaData metaData = clusterService.state().getMetaData();
+        IndexMetaData index = metaData.index(".blob_b2");
+        String indexUUID = index.getIndexUUID();
+
+        // b2
+        String b2Path = (String) response.rows()[1][0];
+        assertThat(b2Path, containsString(resolveCanonicalString("/nodes/")));
+        assertThat(b2Path, endsWith(resolveCanonicalString("/indices/" + indexUUID + "/0")));
+
+        String b2BlobPath = (String) response.rows()[1][1];
+        assertThat(b2BlobPath, containsString(resolveCanonicalString("/nodes/")));
+        assertThat(b2BlobPath, endsWith(resolveCanonicalString("/indices/" + indexUUID + "/0/blobs")));
+        // t1
+        assertThat(response.rows()[2][1], nullValue());
     }
 
     @Test
     public void testSelectGroupByWhereTable() throws Exception {
-        SQLResponse response = transportExecutor.exec("" +
-            "select count(*), num_docs from sys.shards where table_name = 'characters' " +
-            "group by num_docs order by count(*)");
+        SQLResponse response = execute("" +
+                                       "select count(*), num_docs from sys.shards where table_name = 'characters' " +
+                                       "group by num_docs order by count(*)");
         assertThat(response.rowCount(), greaterThan(0L));
     }
 
     @Test
     public void testSelectGroupByAllTables() throws Exception {
-        SQLResponse response = transportExecutor.exec("select count(*), table_name from sys.shards " +
-            "group by table_name order by table_name");
+        SQLResponse response = execute("select count(*), table_name from sys.shards " +
+                                       "group by table_name order by table_name");
         assertEquals(3L, response.rowCount());
         assertEquals(10L, response.rows()[0][0]);
         assertEquals("blobs", response.rows()[0][1]);
@@ -88,101 +113,134 @@ public class SysShardsTest extends ClassLifecycleIntegrationTest {
     }
 
     @Test
+    public void testGroupByWithLimitUnassignedShards() throws Exception {
+        try {
+            execute("create table t (id int, name string) with (number_of_replicas=2, \"write.wait_for_active_shards\"=1)");
+            ensureYellow();
+
+            SQLResponse response = execute("select sum(num_docs), table_name, sum(num_docs) from sys.shards group by table_name order by table_name desc limit 1000");
+            assertThat(response.rowCount(), is(4L));
+            assertThat(TestingHelpers.printedTable(response.rows()),
+                is("0| t| 0\n" +
+                   "0| quotes| 0\n" +
+                   "14| characters| 14\n" +
+                   "0| blobs| 0\n"));
+        } finally {
+            execute("drop table t");
+        }
+    }
+
+    @Test
     public void testSelectGroupByWhereNotLike() throws Exception {
-        SQLResponse response = transportExecutor.exec("select count(*), table_name from sys.shards " +
-            "where table_name not like 'my_table%' group by table_name order by table_name");
+        SQLResponse response = execute("select count(*), table_name from sys.shards " +
+                                       "where table_name not like 'my_table%' group by table_name order by table_name");
         assertEquals(3L, response.rowCount());
         assertEquals(10L, response.rows()[0][0]);
         assertEquals("blobs", response.rows()[0][1]);
-        assertEquals(10L, response.rows()[1][0]);
+        assertEquals(8L, response.rows()[1][0]);
         assertEquals("characters", response.rows()[1][1]);
-        assertEquals(10L, response.rows()[2][0]);
+        assertEquals(8L, response.rows()[2][0]);
         assertEquals("quotes", response.rows()[2][1]);
     }
 
     @Test
     public void testSelectWhereTable() throws Exception {
-        SQLResponse response = transportExecutor.exec(
-            "select id, sys.nodes.name, size from sys.shards " +
+        SQLResponse response = execute(
+            "select id, size from sys.shards " +
             "where table_name = 'characters'");
-        assertEquals(10L, response.rowCount());
+        assertEquals(8L, response.rowCount());
     }
 
     @Test
     public void testSelectStarWhereTable() throws Exception {
-        SQLResponse response = transportExecutor.exec(
+        SQLResponse response = execute(
             "select * from sys.shards where table_name = 'characters'");
-        assertEquals(10L, response.rowCount());
-        assertEquals(10, response.cols().length);
+        assertEquals(8L, response.rowCount());
+        assertEquals(16, response.cols().length);
     }
 
     @Test
     public void testSelectStarAllTables() throws Exception {
-        SQLResponse response = transportExecutor.exec("select * from sys.shards");
-        assertEquals(30L, response.rowCount());
-        assertEquals(10, response.cols().length);
-        assertEquals("schema_name, table_name, id, partition_ident, num_docs, primary, relocating_node, size, state, orphan_partition",
-            Joiner.on(", ").join(response.cols()));
+        SQLResponse response = execute("select * from sys.shards");
+        assertEquals(26L, response.rowCount());
+        assertEquals(16, response.cols().length);
+        assertThat(response.cols(), arrayContaining(
+            "blob_path",
+            "id",
+            "min_lucene_version",
+            "node",
+            "num_docs",
+            "orphan_partition",
+            "partition_ident",
+            "path",
+            "primary",
+            "recovery",
+            "relocating_node",
+            "routing_state",
+            "schema_name",
+            "size",
+            "state",
+            "table_name"));
     }
 
     @Test
     public void testSelectStarLike() throws Exception {
-        SQLResponse response = transportExecutor.exec(
+        SQLResponse response = execute(
             "select * from sys.shards where table_name like 'charact%'");
-        assertEquals(10L, response.rowCount());
-        assertEquals(10, response.cols().length);
+        assertEquals(8L, response.rowCount());
+        assertEquals(16, response.cols().length);
     }
 
     @Test
     public void testSelectStarNotLike() throws Exception {
-        SQLResponse response = transportExecutor.exec(
+        SQLResponse response = execute(
             "select * from sys.shards where table_name not like 'quotes%'");
-        assertEquals(20L, response.rowCount());
-        assertEquals(10, response.cols().length);
+        assertEquals(18L, response.rowCount());
+        assertEquals(16, response.cols().length);
     }
 
     @Test
     public void testSelectStarIn() throws Exception {
-        SQLResponse response = transportExecutor.exec(
+        SQLResponse response = execute(
             "select * from sys.shards where table_name in ('characters')");
-        assertEquals(10L, response.rowCount());
-        assertEquals(10, response.cols().length);
+        assertEquals(8L, response.rowCount());
+        assertEquals(16, response.cols().length);
     }
 
     @Test
     public void testSelectStarMatch() throws Exception {
-
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("function not supported on system tables: FunctionIdent{name=match, argumentTypes=[object, string, string, object]}");
-        transportExecutor.exec("select * from sys.shards where match(table_name, 'characters')");
+        expectedException.expectMessage("Cannot use match predicate on system tables");
+        execute("select * from sys.shards where match(table_name, 'characters')");
     }
 
     @Test
     public void testSelectOrderBy() throws Exception {
-        SQLResponse response = transportExecutor.exec("select * from sys.shards order by table_name");
-        assertEquals(30L, response.rowCount());
-        String[] tableNames = {"blobs", "characters", "quotes"};
-        for (int i=0; i<response.rowCount(); i++) {
-            int idx = i/10;
-            assertEquals(tableNames[idx], response.rows()[i][1]);
+        SQLResponse response = execute("select table_name, min_lucene_version, * " +
+                                       "from sys.shards order by table_name");
+        assertEquals(26L, response.rowCount());
+        List<String> tableNames = Arrays.asList("blobs", "characters", "quotes");
+        for (Object[] row : response.rows()) {
+            assertThat(tableNames.contains(row[0]), is(true));
+            assertThat(row[1], is(Version.LATEST.toString()));
         }
     }
 
     @Test
     public void testSelectGreaterThan() throws Exception {
-        SQLResponse response = transportExecutor.exec("select * from sys.shards where num_docs > 0");
+        SQLResponse response = execute("select * from sys.shards where num_docs > 0");
         assertThat(response.rowCount(), greaterThan(0L));
     }
 
     @Test
     public void testSelectWhereBoolean() throws Exception {
-        SQLResponse response = transportExecutor.exec("select * from sys.shards where \"primary\" = false");
-        assertEquals(15L, response.rowCount());
+        SQLResponse response = execute("select * from sys.shards where \"primary\" = false");
+        assertEquals(13L, response.rowCount());
     }
 
     @Test
     public void testSelectGlobalAggregates() throws Exception {
-        SQLResponse response = transportExecutor.exec(
+        SQLResponse response = execute(
             "select sum(size), min(size), max(size), avg(size) from sys.shards");
         assertEquals(1L, response.rowCount());
         assertEquals(4, response.rows()[0].length);
@@ -194,70 +252,157 @@ public class SysShardsTest extends ClassLifecycleIntegrationTest {
 
     @Test
     public void testSelectGlobalCount() throws Exception {
-        SQLResponse response = transportExecutor.exec("select count(*) from sys.shards");
+        SQLResponse response = execute("select count(*) from sys.shards");
         assertEquals(1L, response.rowCount());
-        assertEquals(30L, response.rows()[0][0]);
+        assertEquals(26L, response.rows()[0][0]);
     }
 
     @Test
     public void testSelectGlobalCountAndOthers() throws Exception {
-        SQLResponse response = transportExecutor.exec("select count(*), max(table_name) from sys.shards");
+        SQLResponse response = execute("select count(*), max(table_name) from sys.shards");
         assertEquals(1L, response.rowCount());
-        assertEquals(30L, response.rows()[0][0]);
+        assertEquals(26L, response.rows()[0][0]);
         assertEquals("quotes", response.rows()[0][1]);
-    }
-
-    @Test
-    public void testSelectGlobalExpressionGroupBy() throws Exception {
-        SQLResponse response = transportExecutor.exec("select count(*), table_name, sys.cluster.name from sys.shards " +
-            "group by sys.cluster.name, table_name order by table_name");
-        assertEquals(3, response.rowCount());
-        assertEquals(10L, response.rows()[0][0]);
-        assertEquals("blobs", response.rows()[0][1]);
-        assertEquals(GLOBAL_CLUSTER.clusterName(), response.rows()[0][2]);
-
-        assertEquals(10L, response.rows()[1][0]);
-        assertEquals("characters", response.rows()[1][1]);
-        assertEquals(GLOBAL_CLUSTER.clusterName(), response.rows()[1][2]);
-
-        assertEquals(10L, response.rows()[2][0]);
-        assertEquals("quotes", response.rows()[2][1]);
-        assertEquals(GLOBAL_CLUSTER.clusterName(), response.rows()[2][2]);
     }
 
     @Test
     public void testGroupByUnknownResultColumn() throws Exception {
         expectedException.expect(SQLActionException.class);
-        transportExecutor.exec("select lol from sys.shards group by table_name");
+        execute("select lol from sys.shards group by table_name");
     }
 
     @Test
     public void testGroupByUnknownGroupByColumn() throws Exception {
         expectedException.expect(SQLActionException.class);
-        transportExecutor.exec("select max(num_docs) from sys.shards group by lol");
+        execute("select max(num_docs) from sys.shards group by lol");
     }
 
     @Test
     public void testGroupByUnknownOrderBy() throws Exception {
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("Column 'lol' unknown");
-        transportExecutor.exec(
+        expectedException.expectMessage("Column lol unknown");
+        execute(
             "select sum(num_docs), table_name from sys.shards group by table_name order by lol");
     }
 
     @Test
     public void testGroupByUnknownWhere() throws Exception {
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("Column 'lol' unknown");
-        SQLResponse response = transportExecutor.exec(
+        expectedException.expectMessage("Column lol unknown");
+        execute(
             "select sum(num_docs), table_name from sys.shards where lol='funky' group by table_name");
     }
 
     @Test
     public void testGlobalAggregateUnknownWhere() throws Exception {
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("Column 'lol' unknown");
-        SQLResponse response = transportExecutor.exec(
+        expectedException.expectMessage("Column lol unknown");
+        execute(
             "select sum(num_docs) from sys.shards where lol='funky'");
+    }
+
+    @Test
+    public void testSelectShardIdFromSysNodes() throws Exception {
+        expectedException.expect(SQLActionException.class);
+        expectedException.expectMessage("Relation 'sys.shards' unknown");
+        execute("select sys.shards.id from sys.nodes");
+    }
+
+    @Test
+    public void testSelectWithOrderByColumnNotInOutputs() throws Exception {
+        // regression test... query failed with ArrayOutOfBoundsException due to inputColumn mangling in planner
+        SQLResponse response = execute("select id from sys.shards order by table_name limit 1");
+        assertThat(response.rowCount(), is(1L));
+        assertThat(response.rows()[0][0], instanceOf(Integer.class));
+    }
+
+    @Test
+    public void testSelectGroupByHaving() throws Exception {
+        SQLResponse response = execute("select count(*) " +
+                                       "from sys.shards " +
+                                       "group by table_name " +
+                                       "having table_name = 'quotes'");
+        assertThat(TestingHelpers.printedTable(response.rows()), is("8\n"));
+    }
+
+    @Test
+    public void testSelectNodeSysExpression() throws Exception {
+        SQLResponse response = execute(
+            "select node, node['name'], id from sys.shards order by node['name'], id  limit 1");
+        assertEquals(1L, response.rowCount());
+        Map<String, Object> fullNode = (Map<String, Object>) response.rows()[0][0];
+        String nodeName = response.rows()[0][1].toString();
+        assertEquals("node_s0", nodeName);
+        assertEquals("node_s0", fullNode.get("name"));
+    }
+
+    @Test
+    public void testOrphanedPartitionExpression() throws Exception {
+        try {
+            execute("create table c.orphan_test (id int primary key, p string primary key) " +
+                    "partitioned by (p) " +
+                    "clustered into 1 shards " +
+                    "with (number_of_replicas = 0)"
+            );
+            execute("insert into c.orphan_test (id, p) values (1, 'foo')");
+            ensureYellow();
+
+            SQLResponse response = execute(
+                "select orphan_partition from sys.shards where table_name = 'orphan_test'");
+            assertThat(TestingHelpers.printedTable(response.rows()), is("false\n"));
+
+            client().admin().indices()
+                .prepareDeleteTemplate(PartitionName.templateName("c", "orphan_test"))
+                .execute().get(1, TimeUnit.SECONDS);
+
+            response = execute(
+                "select orphan_partition from sys.shards where table_name = 'orphan_test'");
+            assertThat(TestingHelpers.printedTable(response.rows()), is("true\n"));
+        } finally {
+            execute("drop table c.orphan_test");
+        }
+    }
+
+    @Test
+    public void testSelectNodeSysExpressionWithUnassignedShards() throws Exception {
+        try {
+            execute("create table users (id integer primary key, name string) " +
+                    "clustered into 5 shards with (number_of_replicas=2, \"write.wait_for_active_shards\"=1)");
+            ensureYellow();
+            SQLResponse response = execute(
+                "select node['name'], id from sys.shards where table_name = 'users' order by node['name'] nulls last"
+            );
+            String nodeName = response.rows()[0][0].toString();
+            assertEquals("node_s0", nodeName);
+            assertThat(response.rows()[12][0], is(nullValue()));
+        } finally {
+            execute("drop table users");
+        }
+    }
+
+    @Test
+    public void testSelectRecoveryExpression() throws Exception {
+        SQLResponse response = execute("select recovery, " +
+                                       "recovery['files'], recovery['files']['used'], recovery['files']['reused'], recovery['files']['recovered'], " +
+                                       "recovery['size'], recovery['size']['used'], recovery['size']['reused'], recovery['size']['recovered'] " +
+                                       "from sys.shards");
+        for (Object[] row : response.rows()) {
+            Map recovery = (Map) row[0];
+            Map<String, Integer> files = (Map<String, Integer>) row[1];
+            assertThat(((Map<String, Integer>) recovery.get("files")).entrySet(), equalTo(files.entrySet()));
+            Map<String, Long> size = (Map<String, Long>) row[5];
+            assertThat(((Map<String, Long>) recovery.get("size")).entrySet(), equalTo(size.entrySet()));
+        }
+    }
+
+    @Test
+    public void testScalarEvaluatesInErrorOnSysShards() throws Exception {
+        // we need at least 1 shard, otherwise the table is empty and no evaluation occurs
+        execute("create table t1 (id integer) clustered into 1 shards with (number_of_replicas=0)");
+        ensureYellow();
+
+        expectedException.expect(SQLActionException.class);
+        expectedException.expectMessage(" / by zero");
+        execute("select 1/0 from sys.shards");
     }
 }

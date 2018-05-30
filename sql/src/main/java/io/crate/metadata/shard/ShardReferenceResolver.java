@@ -22,86 +22,117 @@
 package io.crate.metadata.shard;
 
 import com.google.common.collect.ImmutableMap;
-import io.crate.PartitionName;
+import io.crate.exceptions.ResourceUnknownException;
 import io.crate.exceptions.UnhandledServerException;
-import io.crate.metadata.*;
-import io.crate.metadata.doc.DocSchemaInfo;
+import io.crate.expression.NestableInput;
+import io.crate.expression.reference.LiteralNestableInput;
+import io.crate.expression.reference.ReferenceResolver;
+import io.crate.expression.reference.sys.shard.ShardMinLuceneVersionExpression;
+import io.crate.expression.reference.sys.shard.ShardNumDocsExpression;
+import io.crate.expression.reference.sys.shard.ShardPartitionIdentExpression;
+import io.crate.expression.reference.sys.shard.ShardPartitionOrphanedExpression;
+import io.crate.expression.reference.sys.shard.ShardPathExpression;
+import io.crate.expression.reference.sys.shard.ShardPrimaryExpression;
+import io.crate.expression.reference.sys.shard.ShardRecoveryExpression;
+import io.crate.expression.reference.sys.shard.ShardRelocatingNodeExpression;
+import io.crate.expression.reference.sys.shard.ShardRoutingStateExpression;
+import io.crate.expression.reference.sys.shard.ShardSizeExpression;
+import io.crate.expression.reference.sys.shard.ShardStateExpression;
+import io.crate.metadata.IndexParts;
+import io.crate.metadata.MapBackedRefResolver;
+import io.crate.metadata.PartitionName;
+import io.crate.metadata.Reference;
+import io.crate.metadata.ReferenceIdent;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.Schemas;
 import io.crate.metadata.doc.DocTableInfo;
-import io.crate.metadata.doc.DocTableInfoBuilder;
-import io.crate.operation.reference.partitioned.PartitionedColumnExpression;
-import org.elasticsearch.action.admin.indices.template.put.TransportPutIndexTemplateAction;
-import org.elasticsearch.cluster.ClusterService;
-import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.logging.ESLogger;
+import io.crate.metadata.sys.SysShardsTableInfo;
+import org.apache.logging.log4j.Logger;
+import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.index.Index;
+import org.elasticsearch.index.shard.IndexShard;
+import org.elasticsearch.index.shard.ShardId;
 
+import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 
-public class ShardReferenceResolver extends AbstractReferenceResolver {
+public class ShardReferenceResolver {
 
-    private final Map<ReferenceIdent, ReferenceImplementation> implementations;
-    private final ESLogger logger = Loggers.getLogger(getClass());
+    private static final Logger LOGGER = Loggers.getLogger(ShardReferenceResolver.class);
 
-    @Inject
-    public ShardReferenceResolver(Index index,
-                                  DocSchemaInfo docSchemaInfo,
-                                  ClusterService clusterService,
-                                  final TransportPutIndexTemplateAction transportPutIndexTemplateAction,
-                                  final Map<ReferenceIdent, ReferenceImplementation> globalImplementations,
-                                  final Map<ReferenceIdent, ShardReferenceImplementation> shardImplementations) {
-        ImmutableMap.Builder<ReferenceIdent, ReferenceImplementation> builder = ImmutableMap.builder();
-                builder.putAll(globalImplementations)
-                .putAll(shardImplementations);
+    public static ReferenceResolver<NestableInput<?>> create(ClusterService clusterService,
+                                                             Schemas schemas,
+                                                             IndexShard indexShard) {
+        ShardId shardId = indexShard.shardId();
+        Index index = shardId.getIndex();
 
-        if (PartitionName.isPartition(index.name())) {
-            String tableName = PartitionName.tableName(index.name());
-            // check if alias exists
-            if (clusterService.state().metaData().hasConcreteIndex(tableName)) {
-                // get DocTableInfo for virtual partitioned table
-                DocTableInfo info = new DocTableInfoBuilder(
-                        docSchemaInfo,
-                        new TableIdent(DocSchemaInfo.NAME, tableName),
-                        clusterService, transportPutIndexTemplateAction, true).build();
-                assert info.isPartitioned();
+        ImmutableMap.Builder<ReferenceIdent, NestableInput> builder = ImmutableMap.builder();
+        if (IndexParts.isPartitioned(index.getName())) {
+            addPartitions(index, schemas, builder);
+            builder.put(SysShardsTableInfo.ReferenceIdents.ORPHAN_PARTITION,
+                new ShardPartitionOrphanedExpression(index.getName(), clusterService));
+        } else {
+            builder.put(SysShardsTableInfo.ReferenceIdents.ORPHAN_PARTITION, new LiteralNestableInput<>(false));
+        }
+        IndexParts indexParts = new IndexParts(index.getName());
+        builder.put(SysShardsTableInfo.ReferenceIdents.ID, new LiteralNestableInput<>(shardId.getId()));
+        builder.put(SysShardsTableInfo.ReferenceIdents.SIZE, new ShardSizeExpression(indexShard));
+        builder.put(SysShardsTableInfo.ReferenceIdents.NUM_DOCS, new ShardNumDocsExpression(indexShard));
+        builder.put(SysShardsTableInfo.ReferenceIdents.PRIMARY, new ShardPrimaryExpression(indexShard));
+        builder.put(SysShardsTableInfo.ReferenceIdents.RELOCATING_NODE,
+            new ShardRelocatingNodeExpression(indexShard));
+        builder.put(SysShardsTableInfo.ReferenceIdents.SCHEMA_NAME,
+            new LiteralNestableInput<>(new BytesRef(indexParts.getSchema())));
+        builder.put(SysShardsTableInfo.ReferenceIdents.STATE, new ShardStateExpression(indexShard));
+        builder.put(SysShardsTableInfo.ReferenceIdents.ROUTING_STATE, new ShardRoutingStateExpression(indexShard));
+        builder.put(SysShardsTableInfo.ReferenceIdents.TABLE_NAME,
+            new LiteralNestableInput<>(new BytesRef(indexParts.getTable())));
+        builder.put(SysShardsTableInfo.ReferenceIdents.PARTITION_IDENT,
+            new ShardPartitionIdentExpression(shardId));
+        builder.put(SysShardsTableInfo.ReferenceIdents.PATH, new ShardPathExpression(indexShard));
+        builder.put(SysShardsTableInfo.ReferenceIdents.BLOB_PATH, new LiteralNestableInput<>(null));
+        builder.put(SysShardsTableInfo.ReferenceIdents.MIN_LUCENE_VERSION,
+            new ShardMinLuceneVersionExpression(indexShard));
+        builder.put(SysShardsTableInfo.ReferenceIdents.RECOVERY, new ShardRecoveryExpression(indexShard));
+        builder.put(SysShardsTableInfo.ReferenceIdents.NODE, new NodeNestableInput(clusterService.localNode()));
+        return new MapBackedRefResolver(builder.build());
+    }
+
+    private static void addPartitions(Index index,
+                                      Schemas schemas,
+                                      ImmutableMap.Builder<ReferenceIdent, NestableInput> builder) {
+        PartitionName partitionName;
+        try {
+            partitionName = PartitionName.fromIndexOrTemplate(index.getName());
+        } catch (IllegalArgumentException e) {
+            throw new UnhandledServerException(String.format(Locale.ENGLISH,
+                "Unable to load PARTITIONED BY columns from partition %s", index.getName()), e);
+        }
+        RelationName relationName = partitionName.relationName();
+        try {
+            DocTableInfo info = schemas.getTableInfo(relationName);
+            if (!schemas.isOrphanedAlias(info)) {
+                assert info.isPartitioned() : "table must be partitioned";
                 int i = 0;
                 int numPartitionedColumns = info.partitionedByColumns().size();
 
-                PartitionName partitionName;
-                try {
-                    partitionName = PartitionName.fromString(
-                            index.name(),
-                            tableName);
-                } catch (IllegalArgumentException e) {
-                    throw new UnhandledServerException(
-                            String.format(Locale.ENGLISH,
-                                    "Unable to load PARTITIONED BY columns from partition %s",
-                                    index.name()),
-                            e
+                List<BytesRef> partitionValue = partitionName.values();
+                assert partitionValue.size() ==
+                       numPartitionedColumns : "invalid number of partitioned columns";
+                for (Reference partitionedInfo : info.partitionedByColumns()) {
+                    builder.put(
+                        partitionedInfo.ident(),
+                        new LiteralNestableInput<>(partitionedInfo.valueType().value(partitionValue.get(i)))
                     );
-                }
-                assert partitionName.values().size() == numPartitionedColumns : "invalid number of partitioned columns";
-                for (ReferenceInfo partitionedInfo : info.partitionedByColumns()) {
-                    builder.put(partitionedInfo.ident(), new PartitionedColumnExpression(
-                            partitionedInfo,
-                            partitionName.values().get(i)
-                    ));
                     i++;
                 }
             } else {
-                logger.error("Orphaned partition '{}' with missing table '{}' found",
-                        index, tableName);
-
+                LOGGER.error("Orphaned partition '{}' with missing table '{}' found", index, relationName.fqn());
             }
+        } catch (ResourceUnknownException e) {
+            LOGGER.error("Orphaned partition '{}' with missing table '{}' found", index, relationName.fqn());
         }
-        this.implementations = builder.build();
-
     }
-
-    @Override
-    protected Map<ReferenceIdent, ReferenceImplementation> implementations() {
-        return implementations;
-    }
-
 }

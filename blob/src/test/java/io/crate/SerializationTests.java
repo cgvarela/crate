@@ -22,16 +22,15 @@
 package io.crate;
 
 import io.crate.blob.PutChunkReplicaRequest;
+import io.crate.test.integration.CrateUnitTest;
 import org.elasticsearch.common.bytes.BytesArray;
-import org.elasticsearch.common.io.stream.BytesStreamInput;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
+import org.elasticsearch.common.io.stream.StreamInput;
 import org.junit.Test;
 
 import java.util.UUID;
 
-import static org.junit.Assert.assertEquals;
-
-public class SerializationTests {
+public class SerializationTests extends CrateUnitTest {
 
 
     @Test
@@ -45,11 +44,12 @@ public class SerializationTests {
         requestOut.transferId = transferId;
         requestOut.currentPos = 10;
         requestOut.isLast = false;
-        requestOut.content = new BytesArray(new byte[] { 0x65, 0x66 });
+        requestOut.content = new BytesArray(new byte[]{0x65, 0x66});
         requestOut.sourceNodeId = "nodeId";
 
         requestOut.writeTo(outputStream);
-        BytesStreamInput inputStream = new BytesStreamInput(outputStream.bytes().copyBytesArray());
+
+        StreamInput inputStream = outputStream.bytes().streamInput();
 
         PutChunkReplicaRequest requestIn = new PutChunkReplicaRequest();
         requestIn.readFrom(inputStream);

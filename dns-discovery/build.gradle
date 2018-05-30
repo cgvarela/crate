@@ -1,0 +1,10 @@
+apply from: "$rootDir/gradle/javaModule.gradle"
+
+archivesBaseName = 'crate-dns-discovery'
+group = 'io.crate'
+
+dependencies {
+    compile project(':core')
+    compile 'dnsjava:dnsjava:2.1.8'
+    testCompile project(':integration-testing')
+}

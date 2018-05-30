@@ -24,56 +24,207 @@ package io.crate.metadata.information;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.crate.metadata.ColumnIdent;
-import io.crate.metadata.ReferenceIdent;
-import io.crate.metadata.ReferenceInfo;
-import io.crate.metadata.TableIdent;
-import io.crate.planner.RowGranularity;
-import io.crate.types.DataType;
+import io.crate.metadata.GeneratedReference;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.RowContextCollectorExpression;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.expressions.RowCollectExpressionFactory;
+import io.crate.expression.reference.information.ColumnContext;
+import io.crate.metadata.table.ColumnRegistrar;
+import io.crate.types.ByteType;
 import io.crate.types.DataTypes;
+import io.crate.types.DoubleType;
+import io.crate.types.FloatType;
+import io.crate.types.IntegerType;
+import io.crate.types.LongType;
+import io.crate.types.ShortType;
+import org.elasticsearch.common.collect.MapBuilder;
+import org.elasticsearch.common.lucene.BytesRefs;
+
+import java.util.Map;
 
 public class InformationColumnsTableInfo extends InformationTableInfo {
 
     public static final String NAME = "columns";
-    public static final TableIdent IDENT = new TableIdent(InformationSchemaInfo.NAME, NAME);
+    public static final RelationName IDENT = new RelationName(InformationSchemaInfo.NAME, NAME);
 
     public static class Columns {
-        public static final ColumnIdent SCHEMA_NAME = new ColumnIdent("schema_name");
-        public static final ColumnIdent TABLE_NAME = new ColumnIdent("table_name");
-        public static final ColumnIdent COLUMN_NAME = new ColumnIdent("column_name");
-        public static final ColumnIdent ORDINAL_POSITION = new ColumnIdent("ordinal_position");
-        public static final ColumnIdent DATA_TYPE = new ColumnIdent("data_type");
+        static final ColumnIdent TABLE_SCHEMA = new ColumnIdent("table_schema");
+        static final ColumnIdent TABLE_NAME = new ColumnIdent("table_name");
+        static final ColumnIdent TABLE_CATALOG = new ColumnIdent("table_catalog");
+        static final ColumnIdent COLUMN_NAME = new ColumnIdent("column_name");
+        static final ColumnIdent ORDINAL_POSITION = new ColumnIdent("ordinal_position");
+        static final ColumnIdent DATA_TYPE = new ColumnIdent("data_type");
+        static final ColumnIdent IS_GENERATED = new ColumnIdent("is_generated");
+        static final ColumnIdent IS_NULLABLE = new ColumnIdent("is_nullable");
+        static final ColumnIdent GENERATION_EXPRESSION = new ColumnIdent("generation_expression");
+        static final ColumnIdent COLUMN_DEFAULT = new ColumnIdent("column_default");
+        static final ColumnIdent CHARACTER_MAXIMUM_LENGTH = new ColumnIdent("character_maximum_length");
+        static final ColumnIdent CHARACTER_OCTET_LENGTH = new ColumnIdent("character_octet_length");
+        static final ColumnIdent NUMERIC_PRECISION = new ColumnIdent("numeric_precision");
+        static final ColumnIdent NUMERIC_PRECISION_RADIX = new ColumnIdent("numeric_precision_radix");
+        static final ColumnIdent NUMERIC_SCALE = new ColumnIdent("numeric_scale");
+        static final ColumnIdent DATETIME_PRECISION = new ColumnIdent("datetime_precision");
+        static final ColumnIdent INTERVAL_TYPE = new ColumnIdent("interval_type");
+        static final ColumnIdent INTERVAL_PRECISION = new ColumnIdent("interval_precision");
+        static final ColumnIdent CHARACTER_SET_CATALOG = new ColumnIdent("character_set_catalog");
+        static final ColumnIdent CHARACTER_SET_SCHEMA = new ColumnIdent("character_set_schema");
+        static final ColumnIdent CHARACTER_SET_NAME = new ColumnIdent("character_set_name");
+        static final ColumnIdent COLLATION_CATALOG = new ColumnIdent("collation_catalog");
+        static final ColumnIdent COLLATION_SCHEMA = new ColumnIdent("collation_schema");
+        static final ColumnIdent COLLATION_NAME = new ColumnIdent("collation_name");
+        static final ColumnIdent DOMAIN_CATALOG = new ColumnIdent("domain_catalog");
+        static final ColumnIdent DOMAIN_SCHEMA = new ColumnIdent("domain_schema");
+        static final ColumnIdent DOMAIN_NAME = new ColumnIdent("domain_name");
+        static final ColumnIdent USER_DEFINED_TYPE_CATALOG = new ColumnIdent("user_defined_type_catalog");
+        static final ColumnIdent USER_DEFINED_TYPE_SCHEMA = new ColumnIdent("user_defined_type_schema");
+        static final ColumnIdent USER_DEFINED_TYPE_NAME = new ColumnIdent("user_defined_type_name");
+        static final ColumnIdent CHECK_REFERENCES = new ColumnIdent("check_references");
+        static final ColumnIdent CHECK_ACTION = new ColumnIdent("check_action");
     }
 
-    public static class ReferenceInfos {
-        public static final ReferenceInfo SCHEMA_NAME = info(Columns.SCHEMA_NAME, DataTypes.STRING);
-        public static final ReferenceInfo TABLE_NAME = info(Columns.TABLE_NAME, DataTypes.STRING);
-        public static final ReferenceInfo COLUMN_NAME = info(Columns.COLUMN_NAME, DataTypes.STRING);
-        public static final ReferenceInfo ORDINAL_POSITION = info(Columns.ORDINAL_POSITION, DataTypes.SHORT);
-        public static final ReferenceInfo DATA_TYPE = info(Columns.DATA_TYPE, DataTypes.STRING);
+    private static ColumnRegistrar columnRegistrar() {
+        return new ColumnRegistrar(IDENT, RowGranularity.DOC)
+            .register(Columns.TABLE_SCHEMA, DataTypes.STRING, false)
+            .register(Columns.TABLE_NAME, DataTypes.STRING, false)
+            .register(Columns.TABLE_CATALOG, DataTypes.STRING, false)
+            .register(Columns.COLUMN_NAME, DataTypes.STRING, false)
+            .register(Columns.ORDINAL_POSITION, DataTypes.SHORT, false)
+            .register(Columns.DATA_TYPE, DataTypes.STRING, false)
+            .register(Columns.IS_GENERATED, DataTypes.BOOLEAN, false)
+            .register(Columns.IS_NULLABLE, DataTypes.BOOLEAN, false)
+            .register(Columns.GENERATION_EXPRESSION, DataTypes.STRING)
+            .register(Columns.COLUMN_DEFAULT, DataTypes.STRING)
+            .register(Columns.CHARACTER_MAXIMUM_LENGTH, DataTypes.INTEGER)
+            .register(Columns.CHARACTER_OCTET_LENGTH, DataTypes.INTEGER)
+            .register(Columns.NUMERIC_PRECISION, DataTypes.INTEGER)
+            .register(Columns.NUMERIC_PRECISION_RADIX, DataTypes.INTEGER)
+            .register(Columns.NUMERIC_SCALE, DataTypes.INTEGER)
+            .register(Columns.DATETIME_PRECISION, DataTypes.INTEGER)
+            .register(Columns.INTERVAL_TYPE, DataTypes.STRING)
+            .register(Columns.INTERVAL_PRECISION, DataTypes.INTEGER)
+            .register(Columns.CHARACTER_SET_CATALOG, DataTypes.STRING)
+            .register(Columns.CHARACTER_SET_SCHEMA, DataTypes.STRING)
+            .register(Columns.CHARACTER_SET_NAME, DataTypes.STRING)
+            .register(Columns.COLLATION_CATALOG, DataTypes.STRING)
+            .register(Columns.COLLATION_SCHEMA, DataTypes.STRING)
+            .register(Columns.COLLATION_NAME, DataTypes.STRING)
+            .register(Columns.DOMAIN_CATALOG, DataTypes.STRING)
+            .register(Columns.DOMAIN_SCHEMA, DataTypes.STRING)
+            .register(Columns.DOMAIN_NAME, DataTypes.STRING)
+            .register(Columns.USER_DEFINED_TYPE_CATALOG, DataTypes.STRING)
+            .register(Columns.USER_DEFINED_TYPE_SCHEMA, DataTypes.STRING)
+            .register(Columns.USER_DEFINED_TYPE_NAME, DataTypes.STRING)
+            .register(Columns.CHECK_REFERENCES, DataTypes.STRING)
+            .register(Columns.CHECK_ACTION, DataTypes.INTEGER);
     }
 
-    private static ReferenceInfo info(ColumnIdent columnIdent, DataType dataType) {
-        return new ReferenceInfo(new ReferenceIdent(IDENT, columnIdent), RowGranularity.DOC, dataType);
+    public static Map<ColumnIdent, RowCollectExpressionFactory<ColumnContext>> expression() {
+        return ImmutableMap.<ColumnIdent, RowCollectExpressionFactory<ColumnContext>>builder()
+            .put(Columns.TABLE_SCHEMA,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.info.ident().tableIdent().schema()))
+            .put(Columns.TABLE_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.info.ident().tableIdent().name()))
+            .put(Columns.TABLE_CATALOG,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.info.ident().tableIdent().schema()))
+            .put(Columns.COLUMN_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.info.column().sqlFqn()))
+            .put(Columns.ORDINAL_POSITION,
+                () -> RowContextCollectorExpression.forFunction(ColumnContext::getOrdinal))
+            .put(Columns.DATA_TYPE,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> r.info.valueType().getName()))
+            .put(Columns.COLUMN_DEFAULT,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.CHARACTER_MAXIMUM_LENGTH,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.CHARACTER_OCTET_LENGTH,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.NUMERIC_PRECISION,
+                () -> RowContextCollectorExpression.forFunction(r -> PRECISION_BY_TYPE_ID.get(r.info.valueType().id())))
+            .put(Columns.NUMERIC_PRECISION_RADIX,
+                () -> RowContextCollectorExpression.forFunction(r -> {
+                    if (DataTypes.NUMERIC_PRIMITIVE_TYPES.contains(r.info.valueType())) {
+                        return NUMERIC_PRECISION_RADIX;
+                    }
+                    return null;
+                }))
+            .put(Columns.NUMERIC_SCALE,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.DATETIME_PRECISION,
+                () -> RowContextCollectorExpression.forFunction(r -> {
+                    if (r.info.valueType() == DataTypes.TIMESTAMP) {
+                        return DATETIME_PRECISION;
+                    }
+                    return null;
+                }))
+            .put(Columns.INTERVAL_TYPE,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.INTERVAL_PRECISION,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.CHARACTER_SET_CATALOG,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.CHARACTER_SET_SCHEMA,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.CHARACTER_SET_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.COLLATION_CATALOG,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.COLLATION_SCHEMA,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.COLLATION_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.DOMAIN_CATALOG,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.DOMAIN_SCHEMA,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.DOMAIN_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.USER_DEFINED_TYPE_CATALOG,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.USER_DEFINED_TYPE_SCHEMA,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.USER_DEFINED_TYPE_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.CHECK_REFERENCES,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.CHECK_ACTION,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> null))
+            .put(Columns.IS_GENERATED,
+                () -> RowContextCollectorExpression.forFunction(r -> r.info instanceof GeneratedReference))
+            .put(Columns.IS_NULLABLE,
+                () -> RowContextCollectorExpression.forFunction(r ->
+                    !r.tableInfo.primaryKey().contains(r.info.column()) && r.info.isNullable()))
+            .put(Columns.GENERATION_EXPRESSION,
+                () -> RowContextCollectorExpression.objToBytesRef(r -> {
+                    if (r.info instanceof GeneratedReference) {
+                        return BytesRefs.toBytesRef(((GeneratedReference) r.info).formattedGeneratedExpression());
+                    }
+                    return null;
+                }))
+            .build();
     }
 
-    protected InformationColumnsTableInfo(InformationSchemaInfo schemaInfo) {
-        super(schemaInfo,
-                IDENT,
-                ImmutableList.of(Columns.SCHEMA_NAME, Columns.TABLE_NAME, Columns.COLUMN_NAME),
-                ImmutableMap.<ColumnIdent, ReferenceInfo>builder()
-                    .put(Columns.SCHEMA_NAME, ReferenceInfos.SCHEMA_NAME)
-                    .put(Columns.TABLE_NAME, ReferenceInfos.TABLE_NAME)
-                    .put(Columns.COLUMN_NAME, ReferenceInfos.COLUMN_NAME)
-                    .put(Columns.ORDINAL_POSITION, ReferenceInfos.ORDINAL_POSITION)
-                    .put(Columns.DATA_TYPE, ReferenceInfos.DATA_TYPE)
-                .build(),
-                ImmutableList.<ReferenceInfo>builder()
-                    .add(ReferenceInfos.SCHEMA_NAME)
-                    .add(ReferenceInfos.TABLE_NAME)
-                    .add(ReferenceInfos.COLUMN_NAME)
-                    .add(ReferenceInfos.ORDINAL_POSITION)
-                    .add(ReferenceInfos.DATA_TYPE)
-                .build()
+    private static final Integer NUMERIC_PRECISION_RADIX = 2; // Binary
+    private static final Integer DATETIME_PRECISION = 3; // Milliseconds
+
+    /**
+     * For floating point numbers please refer to:
+     * https://en.wikipedia.org/wiki/IEEE_floating_point
+     */
+    private static final Map<Integer, Integer> PRECISION_BY_TYPE_ID = new MapBuilder<Integer, Integer>()
+        .put(ByteType.ID, 8)
+        .put(ShortType.ID, 16)
+        .put(FloatType.ID, 24)
+        .put(IntegerType.ID, 32)
+        .put(DoubleType.ID, 53)
+        .put(LongType.ID, 64)
+        .map();
+
+    InformationColumnsTableInfo() {
+        super(
+            IDENT,
+            columnRegistrar(),
+            ImmutableList.of(Columns.TABLE_CATALOG, Columns.TABLE_NAME, Columns.TABLE_SCHEMA, Columns.COLUMN_NAME)
         );
     }
 }

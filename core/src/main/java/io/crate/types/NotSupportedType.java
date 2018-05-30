@@ -23,11 +23,13 @@ package io.crate.types;
 
 import io.crate.Streamer;
 
-public class NotSupportedType extends DataType<Void> implements DataTypeFactory {
+public class NotSupportedType extends DataType<Void> {
 
-    public final static NotSupportedType INSTANCE = new NotSupportedType();
-    public final static int ID = 1;
-    private NotSupportedType() {}
+    public static final NotSupportedType INSTANCE = new NotSupportedType();
+    public static final int ID = 1;
+
+    private NotSupportedType() {
+    }
 
     @Override
     public boolean isConvertableTo(DataType other) {
@@ -37,6 +39,11 @@ public class NotSupportedType extends DataType<Void> implements DataTypeFactory 
     @Override
     public int id() {
         return ID;
+    }
+
+    @Override
+    public Precedence precedence() {
+        return Precedence.NotSupportedType;
     }
 
     @Override
@@ -62,10 +69,5 @@ public class NotSupportedType extends DataType<Void> implements DataTypeFactory 
     @Override
     public int compareTo(Object o) {
         return 0;
-    }
-
-    @Override
-    public DataType<?> create() {
-        return INSTANCE;
     }
 }

@@ -21,15 +21,19 @@
 
 package io.crate.types;
 
-import org.elasticsearch.common.io.stream.BytesStreamInput;
+import io.crate.Streamer;
+import io.crate.test.integration.CrateUnitTest;
+import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
+import org.elasticsearch.common.io.stream.StreamInput;
 import org.junit.Test;
 
+import static org.hamcrest.Matchers.array;
 import static org.hamcrest.Matchers.instanceOf;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertThat;
+import static org.hamcrest.Matchers.nullValue;
+import static org.hamcrest.core.Is.is;
 
-public class ArrayTypeTest {
+public class ArrayTypeTest extends CrateUnitTest {
 
     @Test
     public void testArrayTypeSerialization() throws Exception {
@@ -39,16 +43,58 @@ public class ArrayTypeTest {
 
         DataTypes.toStream(arrayType, out);
 
-        BytesStreamInput in = new BytesStreamInput(out.bytes());
+        StreamInput in = out.bytes().streamInput();
 
         DataType readType = DataTypes.fromStream(in);
         assertThat(readType, instanceOf(ArrayType.class));
 
-        ArrayType readArrayType = (ArrayType)readType;
+        ArrayType readArrayType = (ArrayType) readType;
         assertThat(readArrayType.innerType(), instanceOf(ArrayType.class));
 
-        ArrayType readInnerArrayType = (ArrayType)readArrayType.innerType();
+        ArrayType readInnerArrayType = (ArrayType) readArrayType.innerType();
         assertThat(readInnerArrayType.innerType(), instanceOf(StringType.class));
         assertSame(readInnerArrayType.innerType(), StringType.INSTANCE);
+    }
+
+    @Test
+    public void testValueSerialization() throws Exception {
+        ArrayType arrayType = new ArrayType(StringType.INSTANCE);
+
+        Streamer<?> streamer = arrayType.streamer();
+
+        BytesRef[] serArray = new BytesRef[]{
+            new BytesRef("foo"),
+            new BytesRef("bar"),
+            new BytesRef("foobar")
+        };
+
+        BytesStreamOutput out = new BytesStreamOutput();
+        streamer.writeValueTo(out, serArray);
+
+        StreamInput in = out.bytes().streamInput();
+
+        assertThat(streamer.readValueFrom(in), is(serArray));
+    }
+
+    @Test
+    public void testNullValues() throws Exception {
+        ArrayType arrayType = new ArrayType(StringType.INSTANCE);
+
+        Streamer<?> streamer = arrayType.streamer();
+
+        BytesStreamOutput out = new BytesStreamOutput();
+
+        streamer.writeValueTo(out, null);
+
+        StreamInput in = out.bytes().streamInput();
+        assertThat(streamer.readValueFrom(in), is(nullValue()));
+
+        out.reset();
+        Object[] nullArray = {null};
+        streamer.writeValueTo(out, nullArray);
+
+        in = out.bytes().streamInput();
+        Object[] o = (Object[]) streamer.readValueFrom(in);
+        assertThat(o, is(array(nullValue())));
     }
 }

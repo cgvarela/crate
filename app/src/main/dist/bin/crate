@@ -6,6 +6,7 @@
 #   -v: print crate version to stdout
 #   -h: print usage information
 #   -D: set a java system property value
+#   -C: set a Crate property value
 #   -X: set a nonstandard java option
 
 # CONTROLLING STARTUP:
@@ -13,7 +14,6 @@
 # This script relies on few environment variables to determine startup
 # behavior, those variables are:
 #
-#   CRATE_CLASSPATH -- A Java classpath containing everything necessary to run.
 #   JAVA_OPTS    -- Additional arguments to the JVM for heap size, etc
 #   CRATE_JAVA_OPTS -- External Java Opts on top of the defaults set
 #
@@ -71,10 +71,6 @@ CRATE_HOME=`dirname "$SCRIPT"`/..
 # make CRATE_HOME absolute
 CRATE_HOME=`cd "$CRATE_HOME"; pwd`
 
-# define crate config file
-CRATE_CONFIG=$CRATE_HOME/config/crate.yml
-
-
 # If an include wasn't specified in the environment, then search for one...
 if [ "x$CRATE_INCLUDE" = "x" ]; then
     # Locations (in order) to use when searching for an include file.
@@ -100,7 +96,7 @@ else
 fi
 
 if [ -z "$CRATE_CLASSPATH" ]; then
-    echo "You must set the CRATE_CLASSPATH var" >&2
+    echo "CRATE_CLASSPATH should've been initialized via crate.in.sh" >&2
     exit 1
 fi
 
@@ -116,21 +112,27 @@ launch_service()
 {
     pidpath=$1
     daemonized=$2
-    props=$3
-    es_parms="-Dcrate"
+    javaProperties=$3
+
+    case "$4" in
+        *"-Cpath.home="*)
+            props="$4" ;;
+        *)
+            props="\"-Cpath.home=$CRATE_HOME\" $4";;
+    esac
 
     if [ "x$pidpath" != "x" ]; then
-        es_parms="$es_parms -Des.pidfile=$pidpath"
+        props="\"-Cpidfile=$pidpath\" $props"
     fi
 
     if [ "x$daemonized" = "x" ]; then
-        exec "$JAVA" $JAVA_OPTS $CRATE_JAVA_OPTS $es_parms -Des.path.home="$CRATE_HOME" -Des.config="$CRATE_CONFIG" -cp "$CRATE_CLASSPATH" $props \
-                io.crate.bootstrap.CrateF
+        eval exec "$JAVA" $JAVA_OPTS $CRATE_JAVA_OPTS $javaProperties -cp "$CRATE_CLASSPATH" \
+             io.crate.bootstrap.CrateDB $props
         execval=$?
     else
         # Startup Crate, background it, and write the pid.
-        exec "$JAVA" $JAVA_OPTS $CRATE_JAVA_OPTS $es_parms -Des.path.home="$CRATE_HOME" -Des.config="$CRATE_CONFIG" -cp "$CRATE_CLASSPATH" $props \
-                    io.crate.bootstrap.Crate <&- &
+        eval exec "$JAVA" $JAVA_OPTS $CRATE_JAVA_OPTS $javaProperties -cp "$CRATE_CLASSPATH" \
+             io.crate.bootstrap.CrateDB $props -d <&- &
         execval=$?
         [ ! -z "$pidpath" ] && printf '%d' $! > "$pidpath"
     fi
@@ -138,50 +140,53 @@ launch_service()
     return $execval
 }
 
-# Parse any command line options.
-args=`getopt vdhp:D:X: "$@"`
-eval set -- "$args"
+args="$@"
+if test "${args#*"-Des."}" != "$args"; then
+    echo "Support for defining Crate specific settings with the -D option and the es prefix has been dropped."
+    echo "Please use the -C option to configure Crate.\n"
+    exit 1
+fi
 
-while true; do
-    case $1 in
-        -v)
-            "$JAVA" $JAVA_OPTS $CRATE_JAVA_OPTS $es_parms -Dcrate.path.home="$CRATE_HOME" -cp "$CRATE_CLASSPATH" $props \
+# Parse any command line options.
+while getopts "vdhp:D:X:C:" opt; do
+    case $opt in
+        v)
+            "$JAVA" $JAVA_OPTS $CRATE_JAVA_OPTS $es_parms -cp "$CRATE_CLASSPATH" $props \
                     io.crate.Version
             exit 0
         ;;
-        -p)
-            pidfile="$2"
-            shift 2
+        p)
+            pidfile="$OPTARG"
         ;;
-        -d)
+        d)
             daemonized="yes"
-            shift
         ;;
-        -h)
-            echo "Crate is a shared nothing, fully searchable document oriented cluster datastore."
+        h)
+            echo "CrateDB is a shared nothing, fully searchable document oriented cluster datastore."
             echo ""
             echo "  Usage: $(basename $0) [OPTION]..."
-            echo "         starts a new Crate database instance"
+            echo "         starts a new CrateDB instance"
             echo ""
             echo "General options:"
             echo "  -d            start the daemon in the background"
             echo "  -h            print usage information"
             echo "  -p <pidfile>  log the pid to a file"
             echo "  -v            print version information"
+            echo "  -C            set a CrateDB setting"
             echo "  -D            set a java system property value"
             echo "  -X            set a nonstandard java option"
             exit 0
         ;;
-        -D)
-            properties="$properties -D$2"
-            shift 2
+        D)
+            javaProperties="$javaProperties \"-D$OPTARG\""
         ;;
-        -X)
-            properties="$properties -X$2"
-            shift 2
+        C)
+            properties="$properties \"-C$OPTARG\""
+        ;;
+        X)
+            properties="$properties \"-X$OPTARG\""
         ;;
         --)
-            shift
             break
         ;;
         *)
@@ -192,6 +197,6 @@ while true; do
 done
 
 # Start up the service
-launch_service "$pidfile" "$daemonized" "$properties"
+launch_service "$pidfile" "$daemonized" "$javaProperties" "$properties"
 
 exit $?

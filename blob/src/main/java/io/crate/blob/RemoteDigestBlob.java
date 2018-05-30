@@ -22,12 +22,11 @@
 package io.crate.blob;
 
 import io.crate.common.Hex;
-import org.elasticsearch.ElasticsearchIllegalArgumentException;
+import io.netty.buffer.ByteBuf;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.client.Client;
-import org.elasticsearch.common.bytes.BytesArray;
-import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
-import org.jboss.netty.buffer.ChannelBuffer;
+import org.elasticsearch.transport.netty4.Netty4Utils;
 
 import java.util.UUID;
 
@@ -36,7 +35,7 @@ public class RemoteDigestBlob {
     private final String index;
     private Status status;
 
-    public static enum Status {
+    public enum Status {
         FULL((byte) 0),
         PARTIAL((byte) 1),
         MISMATCH((byte) 2),
@@ -69,91 +68,89 @@ public class RemoteDigestBlob {
                     return EXISTS;
                 case 4:
                     return FAILED;
+                default:
+                    throw new IllegalArgumentException("No status match for [" + id + "]");
             }
-            throw new ElasticsearchIllegalArgumentException("No status match for [" + id + "]");
-
         }
     }
 
 
-    private final ESLogger logger = Loggers.getLogger(getClass());
+    private static final Logger logger = Loggers.getLogger(RemoteDigestBlob.class);
 
     private final String digest;
-    private final BlobService blobService;
     private final Client client;
     private long size;
     private StartBlobResponse startResponse;
     private UUID transferId;
 
 
-    public RemoteDigestBlob(BlobService blobService, String index, String digest) {
+    public RemoteDigestBlob(Client client, String index, String digest) {
         this.digest = digest;
-        this.blobService = blobService;
-        this.client = blobService.getInjector().getInstance(Client.class);
+        this.client = client;
         this.size = 0;
         this.index = index;
     }
 
-    public Status status(){
+    public Status status() {
         return status;
     }
 
     public boolean delete() {
         logger.trace("delete");
-        assert (transferId == null);
+        assert transferId == null : "transferId should be null";
         DeleteBlobRequest request = new DeleteBlobRequest(
-                index,
-                Hex.decodeHex(digest)
+            index,
+            Hex.decodeHex(digest)
         );
 
-        DeleteBlobResponse response = client.execute(DeleteBlobAction.INSTANCE, request).actionGet();
-        return response.deleted;
+        return client.execute(DeleteBlobAction.INSTANCE, request).actionGet().deleted;
     }
 
-    private void start(ChannelBuffer buffer, boolean last) {
+    private Status start(ByteBuf buffer, boolean last) {
         logger.trace("start blob upload");
-        assert (transferId == null);
+        assert transferId == null : "transferId should be null";
         StartBlobRequest request = new StartBlobRequest(
-                index,
-                Hex.decodeHex(digest),
-                new BytesArray(buffer.array()),
-                last
+            index,
+            Hex.decodeHex(digest),
+            Netty4Utils.toBytesReference(buffer),
+            last
         );
-        size += buffer.readableBytes();
-        startResponse = client.execute(StartBlobAction.INSTANCE, request).actionGet();
         transferId = request.transferId();
+        size += buffer.readableBytes();
+
+        startResponse = client.execute(StartBlobAction.INSTANCE, request).actionGet();
         status = startResponse.status();
+        return status;
     }
 
-    private void chunk(ChannelBuffer buffer, boolean last) {
-        assert (transferId != null);
+    private Status chunk(ByteBuf buffer, boolean last) {
+        assert transferId != null : "transferId should not be null";
         PutChunkRequest request = new PutChunkRequest(
             index,
             Hex.decodeHex(digest),
             transferId,
-            new BytesArray(buffer.array()),
+            Netty4Utils.toBytesReference(buffer),
             size,
             last
         );
         size += buffer.readableBytes();
-        PutChunkResponse response = client.execute(PutChunkAction.INSTANCE, request).actionGet();
-        status = response.status();
+        PutChunkResponse putChunkResponse = client.execute(PutChunkAction.INSTANCE, request).actionGet();
+        return putChunkResponse.status();
     }
 
-    public Status addContent(ChannelBuffer buffer, boolean last) {
+    public Status addContent(ByteBuf buffer, boolean last) {
         if (startResponse == null) {
             // this is the first call to addContent
-            start(buffer, last);
+            return start(buffer, last);
         } else if (status == Status.EXISTS) {
             // client probably doesn't support 100-continue and is sending chunked requests
             // need to ignore the content.
-        } else if (status != Status.PARTIAL){
+            return status;
+        } else if (status != Status.PARTIAL) {
             throw new IllegalStateException("Expected Status.PARTIAL for chunk but got: " + status);
         } else {
-            chunk(buffer, last);
+            return chunk(buffer, last);
         }
-
-        return status;
     }
 
     public long size() {

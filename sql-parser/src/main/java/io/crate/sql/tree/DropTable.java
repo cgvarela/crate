@@ -21,53 +21,58 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 
-public class DropTable
-        extends Statement
-{
-    private final Table table;
+public class DropTable extends Statement {
 
-    public DropTable(Table table)
-    {
+    private final Table table;
+    private final boolean dropIfExists;
+
+    public DropTable(Table table, boolean dropIfExists) {
         this.table = table;
+        this.dropIfExists = dropIfExists;
     }
 
-    public Table table()
-    {
+    public boolean dropIfExists() {
+        return dropIfExists;
+    }
+
+    public Table table() {
         return table;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitDropTable(this, context);
     }
 
     @Override
-    public int hashCode()
-    {
-        return Objects.hashCode(table);
+    public int hashCode() {
+        return Objects.hashCode(table, dropIfExists);
     }
 
     @Override
-    public boolean equals(Object obj)
-    {
+    public boolean equals(Object obj) {
         if (this == obj) {
             return true;
         }
         if ((obj == null) || (getClass() != obj.getClass())) {
             return false;
         }
-        DropTable o = (DropTable) obj;
-        return Objects.equal(table, o.table);
+        DropTable that = (DropTable) obj;
+        if (this.dropIfExists != that.dropIfExists) {
+            return false;
+        }
+        return table.equals(that.table);
+
     }
 
     @Override
-    public String toString()
-    {
-        return Objects.toStringHelper(this)
-                .add("table", table)
-                .toString();
+    public String toString() {
+        return MoreObjects.toStringHelper(this)
+            .add("table", table)
+            .add("dropIfExists", dropIfExists)
+            .toString();
     }
 }

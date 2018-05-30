@@ -21,7 +21,7 @@
 
 package io.crate.exceptions;
 
-public class SQLParseException extends ValidationException {
+public class SQLParseException extends ValidationException implements UnscopedException {
 
     public SQLParseException(String msg) {
         super(msg);
@@ -34,10 +34,5 @@ public class SQLParseException extends ValidationException {
     @Override
     public int errorCode() {
         return 0;
-    }
-
-    @Override
-    public Object[] args() {
-        return new Object[0];
     }
 }

@@ -21,10 +21,8 @@
 
 package io.crate.integrationtests;
 
-import io.crate.test.integration.CrateIntegrationTest;
 import org.junit.Test;
 
-@CrateIntegrationTest.ClusterScope(scope = CrateIntegrationTest.Scope.GLOBAL)
 public class SqlAlchemyIntegrationTest extends SQLTransportIntegrationTest {
 
     @Test
@@ -33,14 +31,14 @@ public class SqlAlchemyIntegrationTest extends SQLTransportIntegrationTest {
         // session.query(func.count('*')).filter(Test.name == 'foo').scalar()
 
         execute("create table test (col1 integer primary key, col2 string) with (number_of_replicas=0)");
-        ensureGreen();
+        ensureYellow();
         execute("insert into test values (?, ?)", new Object[]{1, "foo"});
         execute("insert into test values (?, ?)", new Object[]{2, "bar"});
         refresh();
 
         execute(
-                "SELECT count(?) AS count_1 FROM test WHERE test.col2 = ?",
-                new Object[]{"*", "foo"}
+            "SELECT count(?) AS count_1 FROM test WHERE test.col2 = ?",
+            new Object[]{"*", "foo"}
         );
         assertEquals(1L, response.rows()[0][0]);
     }
@@ -51,14 +49,14 @@ public class SqlAlchemyIntegrationTest extends SQLTransportIntegrationTest {
         // session.query(Test.col1).filter(Test.col2 == 'foo').scalar()
 
         execute("create table test (col1 integer primary key, col2 string) with (number_of_replicas=0)");
-        ensureGreen();
+        ensureYellow();
         execute("insert into test values (?, ?)", new Object[]{1, "foo"});
         execute("insert into test values (?, ?)", new Object[]{2, "bar"});
         refresh();
 
         execute(
-                "SELECT count(test.col1) AS count_1 FROM test WHERE test.col2 = ?",
-                new Object[]{"foo"}
+            "SELECT count(test.col1) AS count_1 FROM test WHERE test.col2 = ?",
+            new Object[]{"foo"}
         );
         assertEquals(1L, response.rows()[0][0]);
     }
@@ -69,16 +67,16 @@ public class SqlAlchemyIntegrationTest extends SQLTransportIntegrationTest {
         // session.query(func.count('*'), Test.col2).group_by(Test.col2).order_by(desc(func.count('*'))).all()
 
         execute("create table test (col1 integer primary key, col2 string) with (number_of_replicas=0)");
-        ensureGreen();
+        ensureYellow();
         execute("insert into test values (?, ?)", new Object[]{1, "foo"});
         execute("insert into test values (?, ?)", new Object[]{2, "bar"});
         execute("insert into test values (?, ?)", new Object[]{3, "foo"});
         refresh();
 
         execute(
-                "SELECT count(?) AS count_1, test.col2 AS test_col2 FROM test " +
-                        "GROUP BY test.col2 order by count_1 desc",
-                new Object[]{"*"}
+            "SELECT count(?) AS count_1, test.col2 AS test_col2 FROM test " +
+            "GROUP BY test.col2 order by count_1 desc",
+            new Object[]{"*"}
         );
 
         assertEquals(2L, response.rows()[0][0]);
@@ -91,15 +89,15 @@ public class SqlAlchemyIntegrationTest extends SQLTransportIntegrationTest {
 
 
         execute("create table test (col1 integer primary key, col2 string) with (number_of_replicas=0)");
-        ensureGreen();
+        ensureYellow();
         execute("insert into test values (?, ?)", new Object[]{1, "foo"});
         execute("insert into test values (?, ?)", new Object[]{2, "bar"});
         execute("insert into test values (?, ?)", new Object[]{3, "foo"});
         refresh();
 
         execute(
-                "SELECT count(test.col1) AS count_1, test.col2 AS test_col2 FROM test " +
-                        "GROUP BY test.col2 order by count_1 desc"
+            "SELECT count(test.col1) AS count_1, test.col2 AS test_col2 FROM test " +
+            "GROUP BY test.col2 order by count_1 desc"
         );
 
         assertEquals(2L, response.rows()[0][0]);

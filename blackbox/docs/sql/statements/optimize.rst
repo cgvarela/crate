@@ -1,0 +1,122 @@
+.. highlight:: psql
+.. _sql_ref_optimize:
+
+============
+``OPTIMIZE``
+============
+
+Optimize one or more tables explicitly.
+
+.. rubric:: Table of Contents
+
+.. contents::
+   :local:
+
+Synopsis
+========
+
+::
+
+    OPTIMIZE TABLE (table_ident [ PARTITION (partition_column=value [ , ... ])] [, ...] )
+    [ WITH ( optimization_parameter [= value] [, ... ] ) ]
+
+Description
+===========
+
+The OPTIMIZE TABLE command optimizes tables and table partitions by merging the
+segments of a table or a partition and reducing their number. It is also used
+to upgrade tables and table partitions to the current version of the storage
+engine. This command will block until the optimization process is complete. If
+the connection to CrateDB is lost, the request will continue in the background,
+and any new requests will block until the previous optimization is complete.
+
+The ``PARTITION`` clause can be used to only optimize specific partitions of a
+partitioned table. All columns by which a table is partitioned are required.
+
+In case the ``PARTITION`` clause is omitted all open partitions will be
+optimized. Closed partitions are not optimized.
+For performance reasons doing that should be avoided if possible.
+
+See :ref:`partitioned_tables` for more information on partitioned tables.
+
+For further information see :ref:`optimize`.
+
+.. NOTE::
+
+    System tables cannot be optimized
+
+Parameters
+==========
+
+:table_ident:
+  The name (optionally schema-qualified) of an existing table that is to
+  be optimized.
+
+:partition_column:
+  Column name by which the table is partitioned.
+
+Clauses
+=======
+
+``PARTITION``
+-------------
+
+::
+
+    [ PARTITION ( partition_column = value [ , ... ] ) ]
+
+:partition_column:
+  The name of the column by which the table is partitioned.
+
+  All partition columns that were part of the :ref:`partitioned_by_clause` of
+  the :ref:`ref-create-table` statement must be specified.
+
+:value:
+  The columns value.
+
+``WITH``
+--------
+
+The optional WITH clause can specify parameters for the optimization request.
+
+::
+
+    [ WITH ( optimization_parameter [= value] [, ... ] ) ]
+
+:optimization_parameter:
+  Specifies an optional parameter for the optimization request.
+
+Available parameters are:
+
+:max_num_segments:
+  The number of segments to merge to. To fully merge the table or
+  partition set it to ``1``.
+
+  Defaults to simply checking if a merge is necessary, and if so,
+  executes it.
+
+:only_expunge_deletes:
+  Should the merge process only expunge segments with deletes in it.
+
+  In CrateDB, a row is not deleted from a segment, just marked as
+  deleted. During a merge process of segments, a new segment is created
+  that does not have those deletes. This flag allows to only merge
+  segments that have deletes.
+
+  Defaults to ``false``.
+
+:flush:
+  Instructs if a flush should be performed after the optimization.
+
+  Defaults to ``true``.
+
+:upgrade_segments:
+
+  Don't optimize but instead upgrade all segments of the table/partition
+  to the current version of storage engine.
+
+  Defaults to ``false``.
+
+.. NOTE::
+
+    ``upgrade_segments`` cannot be used in combination with other parameters

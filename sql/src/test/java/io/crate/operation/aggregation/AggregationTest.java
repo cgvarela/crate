@@ -22,76 +22,91 @@
 package io.crate.operation.aggregation;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.SettableFuture;
-import io.crate.types.DataType;
+import io.crate.action.sql.SessionContext;
+import io.crate.expression.symbol.Function;
+import io.crate.expression.symbol.Literal;
+import io.crate.expression.symbol.Symbol;
+import io.crate.breaker.RamAccountingContext;
+import io.crate.data.ArrayBucket;
+import io.crate.data.Row;
+import io.crate.execution.engine.aggregation.AggregationFunction;
 import io.crate.metadata.FunctionIdent;
 import io.crate.metadata.Functions;
-import io.crate.operation.aggregation.impl.AggregationImplModule;
-import io.crate.operation.collect.InputCollectExpression;
-import org.elasticsearch.common.inject.AbstractModule;
-import org.elasticsearch.common.inject.Injector;
-import org.elasticsearch.common.inject.ModulesBuilder;
+import io.crate.metadata.TransactionContext;
+import io.crate.execution.engine.collect.InputCollectExpression;
+import io.crate.test.integration.CrateUnitTest;
+import io.crate.types.DataType;
+import org.elasticsearch.Version;
+import org.elasticsearch.common.breaker.CircuitBreaker;
+import org.elasticsearch.common.breaker.NoopCircuitBreaker;
+import org.elasticsearch.common.util.BigArrays;
 import org.junit.Before;
-import org.junit.Rule;
-import org.junit.rules.ExpectedException;
 
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
-public abstract class AggregationTest {
+import static io.crate.testing.TestingHelpers.getFunctions;
 
-    private Map<String, SettableFuture<Object[][]>> nodeResults;
-    protected List<ListenableFuture<Object[][]>> results;
-    private Injector injector;
+public abstract class AggregationTest extends CrateUnitTest {
+
+    protected static final RamAccountingContext ramAccountingContext =
+        new RamAccountingContext("dummy", new NoopCircuitBreaker(CircuitBreaker.FIELDDATA));
+
     protected Functions functions;
 
-    @Rule
-    public ExpectedException expectedException = ExpectedException.none();
-    private Object[][] testData;
+    @Before
+    public void prepare() throws Exception {
+        functions = getFunctions();
+    }
 
-
-    class AggregationTestModule extends AbstractModule {
-
-        @Override
-        protected void configure() {
-            bind(Functions.class).asEagerSingleton();
+    public Object[][] executeAggregation(String name, DataType dataType, Object[][] data) throws Exception {
+        if (dataType == null) {
+            return executeAggregation(name, dataType, data, ImmutableList.of());
+        } else {
+            return executeAggregation(name, dataType, data, ImmutableList.of(dataType));
         }
     }
 
-    @Before
-    public void setUp() throws Exception {
-        injector = new ModulesBuilder().add(
-                new AggregationTestModule(),
-                new AggregationImplModule()
-        ).createInjector();
-
-        functions = injector.getInstance(Functions.class);
-    }
-
-
-    public Object[][] executeAggregation(String name, DataType dataType, Object[][] data) throws Exception {
-
+    public Object[][] executeAggregation(String name, DataType dataType, Object[][] data, List<DataType> argumentTypes) throws Exception {
         FunctionIdent fi;
         InputCollectExpression[] inputs;
         if (dataType != null) {
-            fi = new FunctionIdent(name, ImmutableList.of(dataType));
-            inputs = new InputCollectExpression[]{new InputCollectExpression(0)};
+            fi = new FunctionIdent(name, argumentTypes);
+            inputs = new InputCollectExpression[argumentTypes.size()];
+            for (int i = 0; i < argumentTypes.size(); i++) {
+                inputs[i] = new InputCollectExpression(i);
+            }
         } else {
-            fi = new FunctionIdent(name, ImmutableList.<DataType>of());
+            fi = new FunctionIdent(name, ImmutableList.of());
             inputs = new InputCollectExpression[0];
         }
-        AggregationFunction impl = (AggregationFunction) functions.get(fi);
-        AggregationState state = impl.newState();
+        AggregationFunction impl = (AggregationFunction) functions.getBuiltin(fi.name(), fi.argumentTypes());
+        Object state = impl.newState(ramAccountingContext, Version.CURRENT, BigArrays.NON_RECYCLING_INSTANCE);
 
-        for (Object[] row : data) {
+        ArrayBucket bucket = new ArrayBucket(data);
+
+        for (Row row : bucket) {
             for (InputCollectExpression i : inputs) {
                 i.setNextRow(row);
             }
-            impl.iterate(state, inputs);
+            state = impl.iterate(ramAccountingContext, state, inputs);
 
         }
-        return new Object[][]{{state.value()}};
+        state = impl.terminatePartial(ramAccountingContext, state);
+        return new Object[][]{{state}};
     }
 
+    protected Symbol normalize(String functionName, Object value, DataType type) {
+        return normalize(functionName, Literal.of(type, value));
+    }
+
+    protected Symbol normalize(String functionName, Symbol... args) {
+        DataType[] argTypes = new DataType[args.length];
+        for (int i = 0; i < args.length; i++) {
+            argTypes[i] = args[i].valueType();
+        }
+        AggregationFunction function =
+            (AggregationFunction) functions.getBuiltin(functionName, Arrays.asList(argTypes));
+        return function.normalizeSymbol(new Function(function.info(), Arrays.asList(args)), new TransactionContext(SessionContext.systemSessionContext()));
+    }
 }

@@ -21,23 +21,23 @@
 
 package io.crate;
 
+import io.crate.test.integration.CrateUnitTest;
 import io.crate.types.ArrayType;
 import io.crate.types.DataType;
 import io.crate.types.DataTypes;
 import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.common.io.stream.BytesStreamInput;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
+import org.elasticsearch.common.io.stream.StreamInput;
+import org.hamcrest.Matchers;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
-
-public class DataTypeTest {
+public class DataTypeTest extends CrateUnitTest {
 
     @Test
     public void testStreaming() throws Exception {
@@ -45,7 +45,7 @@ public class DataTypeTest {
         BytesStreamOutput out = new BytesStreamOutput();
         Streamer streamer = DataTypes.STRING.streamer();
         streamer.writeValueTo(out, b1);
-        BytesStreamInput in = new BytesStreamInput(out.bytes());
+        StreamInput in = out.bytes().streamInput();
         BytesRef b2 = (BytesRef) streamer.readValueFrom(in);
         assertEquals(b1, b2);
     }
@@ -56,7 +56,7 @@ public class DataTypeTest {
         BytesStreamOutput out = new BytesStreamOutput();
         Streamer streamer = DataTypes.STRING.streamer();
         streamer.writeValueTo(out, b1);
-        BytesStreamInput in = new BytesStreamInput(out.bytes());
+        StreamInput in = out.bytes().streamInput();
         BytesRef b2 = (BytesRef) streamer.readValueFrom(in);
         assertNull(b2);
     }
@@ -74,7 +74,7 @@ public class DataTypeTest {
 
     @Test
     public void testForValueWithArray() {
-        Boolean[] booleans = new Boolean[] {true, false};
+        Boolean[] booleans = new Boolean[]{true, false};
         DataType dataType = DataTypes.guessType(booleans);
         assertEquals(dataType, new ArrayType(DataTypes.BOOLEAN));
     }
@@ -82,8 +82,8 @@ public class DataTypeTest {
     @Test
     public void testForValueWithTimestampArrayAsString() {
         String[] strings = {"2013-09-10T21:51:43", "2013-11-10T21:51:43"};
-        DataType dataType = DataTypes.guessType(strings, false);
-        assertEquals(dataType, new ArrayType(DataTypes.TIMESTAMP));
+        DataType dataType = DataTypes.guessType(strings);
+        assertEquals(dataType, new ArrayType(DataTypes.STRING));
     }
 
     @Test
@@ -112,8 +112,8 @@ public class DataTypeTest {
     @Test
     public void testForValueNestedList() {
         List<List<String>> nestedStrings = Arrays.asList(
-                Arrays.asList("foo", "bar"),
-                Arrays.asList("f", "b"));
+            Arrays.asList("foo", "bar"),
+            Arrays.asList("f", "b"));
         assertEquals(new ArrayType(new ArrayType(DataTypes.STRING)), DataTypes.guessType(nestedStrings));
     }
 
@@ -121,6 +121,14 @@ public class DataTypeTest {
     public void testForValueMixedDataTypeInList() {
         List<Object> objects = Arrays.<Object>asList("foo", 1);
         DataTypes.guessType(objects);
+    }
+
+    @Test
+    public void testListCanContainMixedTypeIfSafeCastIsPossible() {
+        List<Object> objects = Arrays.asList(1, null, 1.2f, 0);
+        Collections.shuffle(objects);
+        DataType<?> dataType = DataTypes.guessType(objects);
+        assertThat(dataType, Matchers.is(new ArrayType(DataTypes.FLOAT)));
     }
 
     @Test

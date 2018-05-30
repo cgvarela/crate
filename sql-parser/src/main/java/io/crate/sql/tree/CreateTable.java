@@ -21,29 +21,33 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
-import com.google.common.base.Optional;
-import com.google.common.collect.ImmutableList;
 
-import javax.annotation.Nullable;
 import java.util.List;
 
 public class CreateTable extends Statement {
 
     private final Table name;
     private final List<TableElement> tableElements;
+    private final boolean ifNotExists;
     private final List<CrateTableOption> crateTableOptions;
-    private final Optional<GenericProperties> properties;
+    private final GenericProperties properties;
 
     public CreateTable(Table name,
                        List<TableElement> tableElements,
-                       @Nullable List<CrateTableOption> crateTableOptions,
-                       @Nullable GenericProperties genericProperties)
-    {
+                       List<CrateTableOption> crateTableOptions,
+                       GenericProperties genericProperties,
+                       boolean ifNotExists) {
         this.name = name;
         this.tableElements = tableElements;
-        this.crateTableOptions = crateTableOptions != null ? crateTableOptions : ImmutableList.<CrateTableOption>of();
-        this.properties = Optional.fromNullable(genericProperties);
+        this.ifNotExists = ifNotExists;
+        this.crateTableOptions = crateTableOptions;
+        this.properties = genericProperties;
+    }
+
+    public boolean ifNotExists() {
+        return ifNotExists;
     }
 
     public Table name() {
@@ -58,20 +62,18 @@ public class CreateTable extends Statement {
         return crateTableOptions;
     }
 
-    public Optional<GenericProperties> properties() {
+    public GenericProperties properties() {
         return properties;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitCreateTable(this, context);
     }
 
     @Override
-    public int hashCode()
-    {
-        return Objects.hashCode(name, tableElements, crateTableOptions, properties);
+    public int hashCode() {
+        return Objects.hashCode(name, tableElements, crateTableOptions, properties, ifNotExists);
     }
 
     @Override
@@ -81,21 +83,22 @@ public class CreateTable extends Statement {
 
         CreateTable that = (CreateTable) o;
 
-        if (properties != that.properties) return false;
-        if (!crateTableOptions.equals(that.crateTableOptions)) return false;
         if (!name.equals(that.name)) return false;
+        if (ifNotExists != that.ifNotExists) return false;
+        if (!crateTableOptions.equals(that.crateTableOptions)) return false;
         if (!tableElements.equals(that.tableElements)) return false;
+        if (!properties.equals(that.properties)) return false;
 
         return true;
     }
 
     @Override
-    public String toString()
-    {
-        return Objects.toStringHelper(this)
-                .add("name", name)
-                .add("tableElements", tableElements)
-                .add("crateTableOptions", crateTableOptions)
-                .add("properties", properties).toString();
+    public String toString() {
+        return MoreObjects.toStringHelper(this)
+            .add("name", name)
+            .add("tableElements", tableElements)
+            .add("crateTableOptions", crateTableOptions)
+            .add("ifNotExists", ifNotExists)
+            .add("properties", properties).toString();
     }
 }

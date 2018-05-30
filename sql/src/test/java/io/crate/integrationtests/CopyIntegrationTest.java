@@ -21,55 +21,70 @@
 
 package io.crate.integrationtests;
 
-import com.google.common.base.Joiner;
-import io.crate.action.sql.SQLResponse;
-import io.crate.test.integration.CrateIntegrationTest;
+import com.carrotsearch.randomizedtesting.LifecycleScope;
+import com.google.common.collect.ImmutableList;
+import io.crate.action.sql.SQLActionException;
+import io.crate.testing.SQLResponse;
+import io.crate.testing.TestingHelpers;
+import io.crate.testing.UseJdbc;
+import org.elasticsearch.test.ESIntegTestCase;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 
-import static org.hamcrest.Matchers.*;
+import static com.carrotsearch.randomizedtesting.RandomizedTest.newTempDir;
+import static org.hamcrest.Matchers.both;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.endsWith;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.startsWith;
 import static org.hamcrest.core.Is.is;
 
-@CrateIntegrationTest.ClusterScope(scope = CrateIntegrationTest.Scope.GLOBAL)
-public class CopyIntegrationTest extends SQLTransportIntegrationTest {
+@ESIntegTestCase.ClusterScope(numDataNodes = 2)
+@UseJdbc(0) // Copy has no row count
+public class CopyIntegrationTest extends SQLHttpIntegrationTest {
 
-    static {
-        ClassLoader.getSystemClassLoader().setDefaultAssertionStatus(true);
-    }
-
-    private String copyFilePath = getClass().getResource("/essetup/data/copy").getPath();
+    private final String copyFilePath =
+        Paths.get(getClass().getResource("/essetup/data/copy").toURI()).toUri().toString();
+    private final String copyFilePathShared =
+        Paths.get(getClass().getResource("/essetup/data/copy/shared").toURI()).toUri().toString();
+    private final String nestedArrayCopyFilePath =
+        Paths.get(getClass().getResource("/essetup/data/nested_array").toURI()).toUri().toString();
 
     private Setup setup = new Setup(sqlExecutor);
 
     @Rule
     public TemporaryFolder folder = new TemporaryFolder();
 
-    @Rule
-    public ExpectedException expectedException = ExpectedException.none();
-
+    public CopyIntegrationTest() throws URISyntaxException {
+    }
 
     @Test
-    public void testCopyFromFile() throws Exception {
+    public void testCopyFromFileWithJsonExtension() throws Exception {
         execute("create table quotes (id int primary key, " +
                 "quote string index using fulltext) with (number_of_replicas = 0)");
-        ensureGreen();
+        ensureYellow();
 
-        String filePath = Joiner.on(File.separator).join(copyFilePath, "test_copy_from.json");
-        execute("copy quotes from ?", new Object[]{filePath});
-        // 2 nodes on same machine resulting in double affected rows
-        assertEquals(6L, response.rowCount());
-        assertThat(response.duration(), greaterThanOrEqualTo(0L));
+        execute("copy quotes from ?", new Object[]{copyFilePath + "test_copy_from.json"});
+        assertEquals(3L, response.rowCount());
         refresh();
 
         execute("select * from quotes");
@@ -77,20 +92,75 @@ public class CopyIntegrationTest extends SQLTransportIntegrationTest {
         assertThat(response.rows()[0].length, is(2));
 
         execute("select quote from quotes where id = 1");
-        assertThat((String) response.rows()[0][0], is("Don't pañic."));
+        assertThat(response.rows()[0][0], is("Don't pa\u00f1ic."));
+    }
+
+    @Test
+    public void testCopyFromFileWithCSVOption() {
+        execute("create table quotes (id int primary key, " +
+            "quote string index using fulltext) with (number_of_replicas = 0)");
+        ensureYellow();
+
+        execute("copy quotes from ? with (format='csv')", new Object[]{copyFilePath + "test_copy_from_csv.ext"});
+        assertEquals(3L, response.rowCount());
+        refresh();
+
+        execute("select * from quotes");
+        assertEquals(3L, response.rowCount());
+        assertThat(response.rows()[0].length, is(2));
+
+        execute("select quote from quotes where id = 1");
+        assertThat(response.rows()[0][0], is("Don't pa\u00f1ic."));
+    }
+
+    @Test
+    public void testCopyFromFileWithUmlautsWhitespacesAndGlobs() throws Exception {
+        execute("create table t (id int primary key, name string) clustered into 1 shards with (number_of_replicas = 0)");
+        File tmpFolder = folder.newFolder("äwesöme földer");
+        File file = new File(tmpFolder, "süpär.json");
+
+        List<String> lines = Collections.singletonList("{\"id\": 1, \"name\": \"Arthur\"}");
+        Files.write(file.toPath(), lines, StandardCharsets.UTF_8);
+
+        execute("copy t from ?", new Object[]{Paths.get(tmpFolder.toURI()).toUri().toString() + "s*.json"});
+        assertThat(response.rowCount(), is(1L));
+    }
+
+    @Test
+    public void testCopyFromWithOverwriteDuplicates() throws Exception {
+        execute("create table t (id int primary key) with (number_of_replicas = 0)");
+        ensureYellow();
+
+        execute("insert into t (id) values (?)", new Object[][]{
+            new Object[]{1},
+            new Object[]{2},
+            new Object[]{3},
+            new Object[]{4}
+        });
+        execute("refresh table t");
+
+        File tmpExport = folder.newFolder("tmpExport");
+        String uriTemplate = Paths.get(tmpExport.toURI()).toUri().toString();
+        execute("copy t to directory ?", new Object[]{uriTemplate});
+        assertThat(response.rowCount(), is(4L));
+        execute("copy t from ?", new Object[]{uriTemplate + "*"});
+        assertThat(response.rowCount(), is(0L));
+        execute("copy t from ? with (overwrite_duplicates = true, shared=true)",
+            new Object[]{uriTemplate + "*"});
+        assertThat(response.rowCount(), is(4L));
+        execute("refresh table t");
+        execute("select count(*) from t");
+        assertThat(((Long) response.rows()[0][0]), is(4L));
     }
 
     @Test
     public void testCopyFromFileWithoutPK() throws Exception {
         execute("create table quotes (id int, " +
                 "quote string index using fulltext) with (number_of_replicas=0)");
-        ensureGreen();
+        ensureYellow();
 
-        String filePath = Joiner.on(File.separator).join(copyFilePath, "test_copy_from.json");
-        execute("copy quotes from ?", new Object[]{filePath});
-        // 2 nodes on same machine resulting in double affected rows
+        execute("copy quotes from ?", new Object[]{copyFilePath + "test_copy_from.json"});
         assertEquals(6L, response.rowCount());
-        assertThat(response.duration(), greaterThanOrEqualTo(0L));
         refresh();
 
         execute("select * from quotes");
@@ -99,48 +169,220 @@ public class CopyIntegrationTest extends SQLTransportIntegrationTest {
     }
 
     @Test
-    public void testCopyFromDirectory() throws Exception {
+    public void testCopyFromFilePattern() {
         execute("create table quotes (id int primary key, " +
                 "quote string index using fulltext) with (number_of_replicas=0)");
-        ensureGreen();
+        ensureYellow();
 
-        execute("copy quotes from ? with (shared=true)", new Object[]{copyFilePath + "/*"});
-        assertEquals(3L, response.rowCount());
-        refresh();
-
-        execute("select * from quotes");
-        assertEquals(3L, response.rowCount());
-    }
-
-    @Test
-    public void testCopyFromFilePattern() throws Exception {
-        execute("create table quotes (id int primary key, " +
-                "quote string index using fulltext) with (number_of_replicas=0)");
-        ensureGreen();
-
-        String filePath = Joiner.on(File.separator).join(copyFilePath, "*.json");
-        execute("copy quotes from ?", new Object[]{filePath});
-        // 2 nodes on same machine resulting in double affected rows
+        execute("copy quotes from ?", new Object[]{copyFilePathShared + "*.json"});
         assertEquals(6L, response.rowCount());
         refresh();
 
         execute("select * from quotes");
+        assertEquals(6L, response.rowCount());
+    }
+
+    @Test
+    public void testCopyFromFileWithEmptyLine() throws Exception {
+        execute("create table foo (id integer primary key) clustered into 1 shards with (number_of_replicas=0)");
+        ensureYellow();
+        File newFile = folder.newFile();
+
+        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(newFile), StandardCharsets.UTF_8)) {
+            writer.write("{\"id\":1}\n");
+            writer.write("\n");
+            writer.write("{\"id\":2}\n");
+        }
+        execute("copy foo from ?", new Object[]{Paths.get(newFile.toURI()).toUri().toString()});
+        assertEquals(2L, response.rowCount());
+        refresh();
+
+        execute("select * from foo order by id");
+        assertThat(response.rows()[0][0], is(1));
+        assertThat(response.rows()[1][0], is(2));
+    }
+
+    @Test
+    public void testCopyFromFileWithInvalidColumns() throws Exception {
+        execute("create table foo (id integer primary key) clustered into 1 shards with (number_of_replicas=0)");
+        ensureYellow();
+        File newFile = folder.newFile();
+
+        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(newFile), StandardCharsets.UTF_8)) {
+            writer.write("{\"id\":1, \"_invalid\":1}\n");
+            writer.write("{\"id\":2, \"invalid['index']\":2}\n");
+            writer.write("{\"id\":3, \"invalid['_invalid']\":3}\n");
+            writer.write("{\"id\":4, \"valid\": {\"_valid\": 4}}\n");
+        }
+
+        execute("copy foo from ?", new Object[]{Paths.get(newFile.toURI()).toUri().toString()});
+        assertEquals(1L, response.rowCount());
+        refresh();
+
+        execute("select * from foo order by id");
+
+        // Check columns.
+        assertEquals(2L, response.cols().length);
+        assertEquals("valid", response.cols()[1]);
+
+        // Check data of column.
+        assertThat(response.rows()[0][0], is(4));
+        HashMap data = (HashMap)response.rows()[0][1];
+        assertThat(data.get("_valid"), is(4));
+    }
+
+    @Test
+    public void testCopyFromInvalidJson() throws Exception {
+        execute("create table foo (id integer primary key) clustered into 1 shards with (number_of_replicas=0)");
+        ensureYellow();
+        File newFile = folder.newFile();
+        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(newFile), StandardCharsets.UTF_8)) {
+            writer.write("{|}");
+        }
+        expectedException.expect(SQLActionException.class);
+        expectedException.expectMessage("Failed to parse input in line: 1 in file:");
+        execute("copy foo from ?", new Object[]{Paths.get(newFile.toURI()).toUri().toString()});
+    }
+
+    @Test
+    public void testCopyFromFileIntoSinglePartition() throws Exception {
+        execute("CREATE TABLE quotes (id INTEGER, quote STRING) PARTITIONED BY (id)");
+        ensureGreen();
+        execute("COPY quotes PARTITION (id = 1) FROM ? WITH (shared = true)", new Object[]{
+            copyFilePath + "test_copy_from.json"});
+        refresh();
+
+        execute("SELECT * FROM quotes");
         assertEquals(3L, response.rowCount());
     }
 
     @Test
+    public void testCopyFromFileWithCompression() throws Exception {
+        execute("create table quotes (id int, " +
+                "quote string)");
+        ensureGreen();
+
+        execute("copy quotes from ? with (compression='gzip')", new Object[]{copyFilePath + "test_copy_from.gz"});
+        refresh();
+
+        execute("select * from quotes");
+        assertEquals(6L, response.rowCount());
+    }
+
+    @Test
+    public void testCopyFromWithGeneratedColumn() throws Exception {
+        execute("create table quotes (" +
+                " id int," +
+                " quote string," +
+                " gen_quote as concat(quote, ' This is awesome!')" +
+                ")");
+        ensureYellow();
+
+        execute("copy quotes from ? with (shared=true)", new Object[]{copyFilePath + "test_copy_from.json"});
+        refresh();
+
+        execute("select gen_quote from quotes limit 1");
+        assertThat((String) response.rows()[0][0], endsWith("This is awesome!"));
+    }
+
+    @Test
+    public void testCopyFromWithInvalidGivenGeneratedColumn() throws Exception {
+        execute("create table quotes (" +
+                " id int," +
+                " quote as cast(id as string)" +
+                ")");
+        ensureYellow();
+
+        execute("copy quotes from ? with (shared=true)", new Object[]{copyFilePath + "test_copy_from.json"});
+        assertThat(response.rowCount(), is(3L));
+        refresh();
+
+        // quote is not generated through expression but read from source without validation
+        execute("select quote from quotes order by id limit 1");
+        assertThat((String) response.rows()[0][0], is("Don't pañic."));
+    }
+
+    @Test
+    public void testCopyFromToPartitionedTableWithGeneratedColumn() throws Exception {
+        execute("create table quotes (" +
+                " id int," +
+                " quote string," +
+                " gen_quote as concat(quote, ' Partitioned by awesomeness!')" +
+                ") partitioned by (gen_quote)");
+        ensureYellow();
+
+        execute("copy quotes from ? with (shared=true)", new Object[]{copyFilePath + "test_copy_from.json"});
+        refresh();
+
+        execute("select gen_quote from quotes limit 1");
+        assertThat((String) response.rows()[0][0], endsWith("Partitioned by awesomeness!"));
+    }
+
+    @Test
+    public void testCopyFromToPartitionedTableWithNullValue() throws Exception {
+        execute("CREATE TABLE times (" +
+                " time timestamp" +
+                ") partitioned by (time)");
+        ensureYellow();
+
+        execute("copy times from ? with (shared=true)", new Object[]{copyFilePath + "test_copy_from_null_value.json"});
+        refresh();
+
+        execute("select time from times");
+        assertThat(response.rowCount(), is(1L));
+        assertNull(response.rows()[0][0]);
+    }
+
+    @Test
+    public void testCopyFromIntoPartitionWithInvalidGivenGeneratedColumnAsPartitionKey() throws Exception {
+        // test that rows are imported into defined partition even that the partition value does not match the
+        // generated column expression value
+        execute("create table quotes (" +
+                " id int," +
+                " quote string," +
+                " id_str as cast(id+1 as string)" +
+                ") partitioned by (id_str)");
+        ensureYellow();
+
+        execute("copy quotes partition (id_str = 1) from ? with (shared=true)", new Object[]{
+            copyFilePath + "test_copy_from.json"});
+        assertThat(response.rowCount(), is(3L));
+        refresh();
+
+        execute("select * from quotes where id_str = 1");
+        assertThat(response.rowCount(), is(3L));
+    }
+
+    @Test
     public void testCopyToFile() throws Exception {
+        expectedException.expect(SQLActionException.class);
+        expectedException.expectMessage(containsString("Using COPY TO without specifying a DIRECTORY is not supported"));
+
+        execute("create table singleshard (name string) clustered into 1 shards with (number_of_replicas = 0)");
+        ensureYellow();
+
+        execute("copy singleshard to '/tmp/file.json'");
+    }
+
+    @Test
+    public void testCopyToDirectory() throws Exception {
         this.setup.groupBySetup();
 
-        String uriTemplate = Paths.get(folder.getRoot().toURI()).resolve("testCopyToFile%s.json").toAbsolutePath().toString();
-        SQLResponse response = execute("copy characters to format(?, sys.shards.id)", new Object[]{uriTemplate});
+        String uriTemplate = Paths.get(folder.getRoot().toURI()).toUri().toString();
+        SQLResponse response = execute("copy characters to DIRECTORY ?", new Object[]{uriTemplate});
         assertThat(response.rowCount(), is(7L));
-        List<String> lines = new ArrayList<>(7);
-        DirectoryStream<Path> stream = Files.newDirectoryStream(Paths.get(folder.getRoot().toURI()), "*.json");
-        for (Path entry: stream) {
-            lines.addAll(Files.readAllLines(entry, StandardCharsets.UTF_8));
+        String[] list = folder.getRoot().list();
+        assertThat(list, is(notNullValue()));
+        assertThat(list.length, greaterThanOrEqualTo(1));
+        for (String file : list) {
+            assertThat(file, startsWith("characters_"));
         }
 
+        List<String> lines = new ArrayList<>(7);
+        DirectoryStream<Path> stream = Files.newDirectoryStream(Paths.get(folder.getRoot().toURI()), "*.json");
+        for (Path path : stream) {
+            lines.addAll(Files.readAllLines(path, StandardCharsets.UTF_8));
+        }
         assertThat(lines.size(), is(7));
         for (String line : lines) {
             assertThat(line, startsWith("{"));
@@ -149,18 +391,41 @@ public class CopyIntegrationTest extends SQLTransportIntegrationTest {
     }
 
     @Test
+    public void testCopyToWithCompression() throws Exception {
+        execute("create table singleshard (name string) clustered into 1 shards with (number_of_replicas = 0)");
+        ensureYellow();
+        execute("insert into singleshard (name) values ('foo')");
+        execute("refresh table singleshard");
+
+        String uriTemplate = Paths.get(folder.getRoot().toURI()).toUri().toString();
+        SQLResponse response = execute("copy singleshard to DIRECTORY ? with (compression='gzip')", new Object[]{uriTemplate});
+
+        assertThat(response.rowCount(), is(1L));
+
+        String[] list = folder.getRoot().list();
+        assertThat(list, is(notNullValue()));
+        assertThat(list.length, is(1));
+        String file = list[0];
+        assertThat(file, both(startsWith("singleshard_")).and(endsWith(".json.gz")));
+
+        long size = Files.size(Paths.get(folder.getRoot().toURI().resolve(file)));
+        assertThat(size, is(35L));
+    }
+
+    @Test
     public void testCopyColumnsToDirectory() throws Exception {
         this.setup.groupBySetup();
 
-        String uriTemplate = Paths.get(folder.getRoot().toURI()).toAbsolutePath().toString();
+        String uriTemplate = Paths.get(folder.getRoot().toURI()).toUri().toString();
         SQLResponse response = execute("copy characters (name, details['job']) to DIRECTORY ?", new Object[]{uriTemplate});
+        assertThat(response.cols().length, is(0));
         assertThat(response.rowCount(), is(7L));
         List<String> lines = new ArrayList<>(7);
         DirectoryStream<Path> stream = Files.newDirectoryStream(Paths.get(folder.getRoot().toURI()), "*.json");
-        for (Path entry: stream) {
+        for (Path entry : stream) {
             lines.addAll(Files.readAllLines(entry, StandardCharsets.UTF_8));
         }
-        Path path = Paths.get(folder.getRoot().toURI().resolve("characters_1_.json"));
+        Path path = Paths.get(folder.getRoot().toURI().resolve("characters_0_.json"));
         assertTrue(path.toFile().exists());
         assertThat(lines.size(), is(7));
 
@@ -178,24 +443,254 @@ public class CopyIntegrationTest extends SQLTransportIntegrationTest {
     }
 
     @Test
-    public void testCopyToDirectory() throws Exception {
-        this.setup.groupBySetup();
+    public void testCopyToFileColumnsJsonObjectOutput() throws Exception {
+        execute("create table singleshard (name string, test object as (foo string)) clustered into 1 shards with (number_of_replicas = 0)");
+        ensureYellow();
+        execute("insert into singleshard (name, test) values ('foobar', {foo='bar'})");
+        execute("refresh table singleshard");
 
-        String uriTemplate = Paths.get(folder.getRoot().toURI()).toAbsolutePath().toString();
-        SQLResponse response = execute("copy characters to DIRECTORY ?", new Object[]{uriTemplate});
-        assertThat(response.rowCount(), is(7L));
-        List<String> lines = new ArrayList<>(7);
-        DirectoryStream<Path> stream = Files.newDirectoryStream(Paths.get(folder.getRoot().toURI()), "*.json");
-        for (Path entry: stream) {
-            lines.addAll(Files.readAllLines(entry, StandardCharsets.UTF_8));
-        }
-        Path path = Paths.get(folder.getRoot().toURI().resolve("characters_1_.json"));
-        assertTrue(path.toFile().exists());
+        String uriTemplate = Paths.get(folder.getRoot().toURI()).toUri().toString();
+        SQLResponse response = execute("copy singleshard (name, test['foo']) to DIRECTORY ? with (format='json_object')", new Object[]{uriTemplate});
+        assertThat(response.rowCount(), is(1L));
 
-        assertThat(lines.size(), is(7));
+        String[] list = folder.getRoot().list();
+        assertThat(list, is(notNullValue()));
+        assertThat(list.length, is(1));
+        List<String> lines = Files.readAllLines(
+            Paths.get(folder.getRoot().toURI().resolve(list[0])), StandardCharsets.UTF_8);
+
+        assertThat(lines.size(), is(1));
         for (String line : lines) {
             assertThat(line, startsWith("{"));
             assertThat(line, endsWith("}"));
         }
+    }
+
+    @Test
+    public void testCopyToWithWhere() throws Exception {
+        this.setup.groupBySetup();
+
+        String uriTemplate = Paths.get(folder.getRoot().toURI()).toUri().toString();
+        SQLResponse response = execute("copy characters where gender = 'female' to DIRECTORY ?", new Object[]{uriTemplate});
+        assertThat(response.rowCount(), is(2L));
+    }
+
+    @Test
+    public void testCopyToWithWhereOnPrimaryKey() throws Exception {
+        execute("create table t1 (id int primary key) with (number_of_replicas = 0)");
+        execute("insert into t1 (id) values (1)");
+        execute("refresh table t1");
+
+        String uriTemplate = Paths.get(folder.getRoot().toURI()).toUri().toString();
+        SQLResponse response = execute("copy t1 where id = 1 to DIRECTORY ?", new Object[]{uriTemplate});
+        assertThat(response.rowCount(), is(1L));
+    }
+
+    @Test
+    public void testCopyToWithWhereNoMatch() throws Exception {
+        this.setup.groupBySetup();
+
+        String uriTemplate = Paths.get(folder.getRoot().toURI()).toUri().toString();
+        SQLResponse response = execute("copy characters where gender = 'foo' to DIRECTORY ?", new Object[]{uriTemplate});
+        assertThat(response.rowCount(), is(0L));
+    }
+
+    @Test
+    public void testCopyFromNestedArrayRow() throws Exception {
+        // assert that rows with nested arrays aren't imported
+        execute("create table users (id int, " +
+            "name string) with (number_of_replicas=0)");
+        ensureYellow();
+        execute("copy users from ? with (shared=true)", new Object[]{
+            nestedArrayCopyFilePath + "nested_array_copy_from.json"});
+        assertEquals(1L, response.rowCount()); // only 1 document got inserted
+        refresh();
+
+        execute("select * from users");
+        assertThat(response.rowCount(), is(1L));
+
+        assertThat(TestingHelpers.printedTable(response.rows()), is("2| Trillian\n"));
+    }
+
+    @Test
+    public void testCopyToWithGeneratedColumn() throws Exception {
+        execute("CREATE TABLE foo (\n" +
+                "day TIMESTAMP GENERATED ALWAYS AS date_trunc('day', timestamp),\n" +
+                "timestamp TIMESTAMP\n" +
+                ")\n" +
+                "PARTITIONED BY (day)");
+        ensureYellow();
+        execute("insert into foo ( timestamp) values (1454454000377)");
+        refresh();
+        String uriTemplate = Paths.get(folder.getRoot().toURI()).toUri().toString();
+        SQLResponse response = execute("copy foo to DIRECTORY ?", new Object[]{uriTemplate});
+        assertThat(response.rowCount(), is(1L));
+    }
+
+    @Test
+    public void testCopyFromWithRoutingInPK() throws Exception {
+        execute("create table t (i int primary key, c string primary key, a int)" +
+            " clustered by (c) with (number_of_replicas=0)");
+        ensureGreen();
+        execute("insert into t (i, c) values (1, 'clusteredbyvalue'), (2, 'clusteredbyvalue')");
+        refresh();
+
+        String uri = Paths.get(folder.getRoot().toURI()).toUri().toString();
+        SQLResponse response = execute("copy t to directory ?", new Object[]{uri});
+        assertThat(response.rowCount(), is(2L));
+
+        execute("delete from t");
+        refresh();
+
+        execute("copy t from ? with (shared=true)", new Object[]{uri + "t_*"});
+        refresh();
+
+        // only one shard should have all imported rows, since we have the same routing for both rows
+        response = execute("select count(*) from sys.shards where num_docs>0 and table_name='t'");
+        assertThat(response.rows()[0][0], is(1L));
+    }
+
+    @Test
+    public void testCopyFromTwoHttpUrls() throws Exception {
+        execute("create blob table blobs with (number_of_replicas = 0)");
+        execute("create table names (id int primary key, name string) with (number_of_replicas = 0)");
+        ensureYellow();
+
+        String r1 = "{\"id\": 1, \"name\":\"Marvin\"}";
+        String r2 = "{\"id\": 2, \"name\":\"Slartibartfast\"}";
+        String[] urls = {upload("blobs", r1), upload("blobs", r2)};
+
+        execute("copy names from ?", new Object[]{urls});
+        assertThat(response.rowCount(), is(2L));
+        execute("refresh table names");
+        execute("select name from names order by id");
+        assertThat(TestingHelpers.printedTable(response.rows()), is("Marvin\nSlartibartfast\n"));
+    }
+
+    @Test
+    public void testCopyFromTwoUriMixedSchemaAndWildcardUse() throws Exception {
+        execute("create blob table blobs with (number_of_replicas = 0)");
+        execute("create table names (id int primary key, name string) with (number_of_replicas = 0)");
+
+        Path tmpDir = newTempDir(LifecycleScope.TEST);
+        File file = new File(tmpDir.toFile(), "names.json");
+        String r1 = "{\"id\": 1, \"name\": \"Arthur\"}";
+        String r2 = "{\"id\": 2, \"name\":\"Slartibartfast\"}";
+
+        Files.write(file.toPath(), Collections.singletonList(r1), StandardCharsets.UTF_8);
+        String[] urls = {tmpDir.toUri().toString() + "*.json", upload("blobs", r2)};
+
+        execute("copy names from ?", new Object[]{urls});
+        assertThat(response.rowCount(), is(2L));
+        execute("refresh table names");
+        execute("select name from names order by id");
+        assertThat(TestingHelpers.printedTable(response.rows()), is("Arthur\nSlartibartfast\n"));
+    }
+
+    @Test
+    public void testCopyFromIntoTableWithClusterBy() throws Exception {
+        execute("create table quotes (id int, quote string) " +
+            "clustered by (id)" +
+            "with (number_of_replicas = 0)");
+        ensureYellow();
+
+        execute("copy quotes from ? with (shared = true)", new Object[]{copyFilePath + "test_copy_from.json"});
+        assertEquals(3L, response.rowCount());
+        refresh();
+
+        execute("select quote from quotes where id = 2");
+        assertThat((String) response.rows()[0][0], containsString("lot of time"));
+    }
+
+    @Test
+    public void testCopyFromIntoTableWithPkAndClusterBy() throws Exception {
+        execute("create table quotes (id int primary key, quote string) " +
+            "clustered by (id)" +
+            "with (number_of_replicas = 0)");
+        ensureYellow();
+
+        execute("copy quotes from ?", new Object[]{copyFilePath + "test_copy_from.json"});
+        assertEquals(3L, response.rowCount());
+        refresh();
+
+        execute("select quote from quotes where id = 3");
+        assertThat((String) response.rows()[0][0], containsString("Time is an illusion."));
+    }
+
+    private Path setUpTableAndSymlink(String tableName) throws IOException {
+        execute(String.format(Locale.ENGLISH,
+            "create table %s (a int) with (number_of_replicas = 0)",
+            tableName));
+
+        String r1 = "{\"a\": 1}";
+        String r2 = "{\"a\": 2}";
+        String r3 = "{\"a\": 3}";
+        return tmpFileWithLines(ImmutableList.of(r1, r2, r3));
+    }
+
+    private static Path tmpFileWithLines(Iterable<String> lines) throws IOException {
+        Path tmpDir = newTempDir(LifecycleScope.TEST);
+        Path target = Files.createDirectories(tmpDir.resolve("target"));
+        File file = new File(target.toFile(), "data.json");
+        Files.write(file.toPath(), lines, StandardCharsets.UTF_8);
+        return Files.createSymbolicLink(tmpDir.resolve("link"), target);
+    }
+
+    @Test
+    public void testCopyFromSymlinkFolderWithWildcard() throws Exception {
+        Path link = setUpTableAndSymlink("t");
+        execute("copy t from ? with (shared=true)", new Object[]{
+            link.toUri().toString() + "*"
+        });
+        assertThat(response.rowCount(), is(3L));
+    }
+
+    @Test
+    public void testCopyFromSymlinkFolderWithPrefixedWildcard() throws Exception {
+        Path link = setUpTableAndSymlink("t");
+        execute("copy t from ? with (shared=true)", new Object[]{
+            link.toUri().toString() + "d*"
+        });
+        assertThat(response.rowCount(), is(3L));
+    }
+
+    @Test
+    public void testCopyFromSymlinkFolderWithSuffixedWildcard() throws Exception {
+        Path link = setUpTableAndSymlink("t");
+        execute("copy t from ? with (shared=true)", new Object[]{
+            link.toUri().toString() + "*.json"
+        });
+        assertThat(response.rowCount(), is(3L));
+    }
+
+    @Test
+    public void testCopyFromFileInSymlinkFolder() throws Exception {
+        Path link = setUpTableAndSymlink("t");
+        execute("copy t from ? with (shared=true)", new Object[]{
+            link.toUri().toString() + "data.json"
+        });
+        assertThat(response.rowCount(), is(3L));
+    }
+
+    @Test
+    public void testCopyWithGeneratedPartitionColumnThatIsPartOfPrimaryKey() throws Exception {
+        execute("create table t1 (\n" +
+                "  guid string,\n" +
+                "  ts timestamp,\n" +
+                "  g_ts_month timestamp generated always as date_trunc('month', ts),\n" +
+                "  primary key (guid, g_ts_month)\n" +
+                ") partitioned by (g_ts_month)");
+        ensureYellow();
+
+        Path path = tmpFileWithLines(Arrays.asList(
+            "{\"guid\": \"a\", \"ts\": 1496275200000}",
+            "{\"guid\": \"b\", \"ts\": 1496275300000}"
+        ));
+        execute("copy t1 from ? with (shared=true)", new Object[] { path.toUri().toString() + "*.json"});
+        assertThat(response.rowCount(), is(2L));
+
+        execute("copy t1 partition (g_ts_month = 1496275200000) from ? with (shared=true, overwrite_duplicates=true)",
+            new Object[] { path.toUri().toString() + "*.json"});
+        assertThat(response.rowCount(), is(2L));
     }
 }

@@ -1,0 +1,12 @@
+.. _version_1.2.0:
+
+=============
+Version 1.2.0
+=============
+
+Released on 2017/04/24.
+
+.. NOTE::
+
+   This release is superseeded by :ref:`version_2.0.0` and should not be
+   installed. You should directly install :ref:`version_2.0.0` instead.

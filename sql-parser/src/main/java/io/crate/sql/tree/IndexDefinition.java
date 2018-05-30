@@ -21,9 +21,9 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 
-import javax.annotation.Nullable;
 import java.util.List;
 
 public class IndexDefinition extends TableElement {
@@ -33,11 +33,11 @@ public class IndexDefinition extends TableElement {
     private final List<Expression> columns;
     private final GenericProperties properties;
 
-    public IndexDefinition(String ident, String method, List<Expression> columns, @Nullable GenericProperties properties) {
+    public IndexDefinition(String ident, String method, List<Expression> columns, GenericProperties properties) {
         this.ident = ident;
         this.method = method;
         this.columns = columns;
-        this.properties = Objects.firstNonNull(properties, GenericProperties.EMPTY);
+        this.properties = properties;
     }
 
     public String ident() {
@@ -78,12 +78,12 @@ public class IndexDefinition extends TableElement {
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("ident", ident)
-                .add("method", method)
-                .add("columns", columns)
-                .add("properties", properties)
-                .toString();
+        return MoreObjects.toStringHelper(this)
+            .add("ident", ident)
+            .add("method", method)
+            .add("columns", columns)
+            .add("properties", properties)
+            .toString();
     }
 
     @Override

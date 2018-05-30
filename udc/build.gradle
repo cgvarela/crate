@@ -1,43 +1,14 @@
-apply plugin: 'java'
-
+apply from: "$rootDir/gradle/javaModule.gradle"
 archivesBaseName = 'crate-udc'
 
-// we do not want to have elasticsearch here, since we provide it in :es
-configurations {
-    all*.exclude group: 'org.elasticsearch'
-}
-
-
-repositories {
-    mavenCentral()
-}
-
 dependencies {
-    compile project(':es')
     compile project(':core')
-    testCompile project(':testing')
+    testCompile project(':integration-testing')
+    testCompile "io.netty:netty-transport:${versions.netty4}"
+    testCompile "io.netty:netty-codec-http:${versions.netty4}"
 }
 
 test {
-    testLogging {
-        // show standard out and standard error of the test JVM(s) on the console
-        showStandardStreams = true
-        // Show that tests are run in the command-line output
-        events 'started', 'passed'
-    }
-    // force run, see: http://gradle.1045684.n5.nabble.com/how-does-gradle-decide-when-to-run-tests-td3314172.html
-    outputs.upToDateWhen { false }
-
-    jacoco {
-        excludes = [ "*Test*" ]
-    }
-
-}
-
-sourceSets {
-    test {
-        resources {
-            srcDir 'src/test/java'
-        }
-    }
+    testLogging.exceptionFormat = 'full'
+    jacoco.excludes = ["*Test*"]
 }

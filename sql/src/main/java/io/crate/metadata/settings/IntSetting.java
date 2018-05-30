@@ -23,18 +23,52 @@ package io.crate.metadata.settings;
 
 import org.elasticsearch.common.settings.Settings;
 
-public abstract class IntSetting extends Setting<Integer, Integer> {
+import javax.annotation.Nullable;
 
-    public Integer maxValue() {
-        return Integer.MAX_VALUE;
+public class IntSetting extends Setting<Integer, Integer> {
+
+    private final String name;
+    private final Integer defaultValue;
+    private Integer minValue = Integer.MIN_VALUE;
+    private Integer maxValue = Integer.MAX_VALUE;
+
+    public IntSetting(String name, Integer defaultValue) {
+        this.name = name;
+        this.defaultValue = defaultValue;
     }
 
-    public Integer minValue() {
-        return Integer.MIN_VALUE;
+    public IntSetting(String name,
+                      Integer defaultValue,
+                      @Nullable Integer minValue,
+                      @Nullable Integer maxValue) {
+        this(name, defaultValue);
+        if (minValue != null) {
+            this.minValue = minValue;
+        }
+        if (maxValue != null) {
+            this.maxValue = maxValue;
+        }
     }
 
     @Override
+    public String name() {
+        return name;
+    }
+
+    @Override
+    public Integer defaultValue() {
+        return defaultValue;
+    }
+
+    Integer maxValue() {
+        return this.maxValue;
+    }
+
+    public Integer minValue() {
+        return this.minValue;
+    }
+
     public Integer extract(Settings settings) {
-        return settings.getAsInt(settingName(), defaultValue());
+        return settings.getAsInt(name, defaultValue());
     }
 }

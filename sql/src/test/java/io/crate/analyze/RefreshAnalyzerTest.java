@@ -21,118 +21,96 @@
 
 package io.crate.analyze;
 
-import io.crate.PartitionName;
-import io.crate.metadata.MetaDataModule;
-import io.crate.metadata.TableIdent;
+import io.crate.exceptions.OperationOnInaccessibleRelationException;
+import io.crate.exceptions.RelationUnknown;
+import io.crate.metadata.PartitionName;
+import io.crate.metadata.RelationName;
 import io.crate.metadata.blob.BlobSchemaInfo;
-import io.crate.metadata.blob.BlobTableInfo;
-import io.crate.metadata.doc.DocSchemaInfo;
-import io.crate.metadata.sys.MetaDataSysModule;
-import io.crate.metadata.table.SchemaInfo;
+import io.crate.test.integration.CrateDummyClusterServiceUnitTest;
+import io.crate.testing.SQLExecutor;
 import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.common.inject.Module;
+import org.hamcrest.Matchers;
+import org.junit.Before;
 import org.junit.Test;
 
 import java.util.Arrays;
-import java.util.List;
 
-import static junit.framework.TestCase.assertTrue;
-import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertNotNull;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
-public class RefreshAnalyzerTest extends BaseAnalyzerTest {
-    private final static TableIdent TEST_BLOB_TABLE_IDENT = new TableIdent("blob", "blobs");
+public class RefreshAnalyzerTest extends CrateDummyClusterServiceUnitTest {
 
-    static class TestMetaDataModule extends MetaDataModule {
+    private RelationName myBlobsIdent = new RelationName(BlobSchemaInfo.NAME, "blobs");
+    private SQLExecutor e;
 
-        @Override
-        protected void bindSchemas() {
-            super.bindSchemas();
-            SchemaInfo schemaInfo = mock(SchemaInfo.class);
-            BlobTableInfo blobTableInfo = mock(BlobTableInfo.class);
-            when(blobTableInfo.ident()).thenReturn(TEST_BLOB_TABLE_IDENT);
-            when(schemaInfo.getTableInfo(TEST_BLOB_TABLE_IDENT.name())).thenReturn(blobTableInfo);
-            schemaBinder.addBinding(BlobSchemaInfo.NAME).toInstance(schemaInfo);
-
-            SchemaInfo docSchemaInfo = mock(SchemaInfo.class);
-            when(docSchemaInfo.getTableInfo(TEST_PARTITIONED_TABLE_IDENT.name()))
-                    .thenReturn(TEST_PARTITIONED_TABLE_INFO);
-            when(docSchemaInfo.getTableInfo(TEST_DOC_TABLE_IDENT.name())).thenReturn(userTableInfo);
-
-            schemaBinder.addBinding(DocSchemaInfo.NAME).toInstance(docSchemaInfo);
-        }
-    }
-
-    @Override
-    protected List<Module> getModules() {
-        List<Module> modules = super.getModules();
-        modules.addAll(Arrays.<Module>asList(
-                new TestModule(),
-                new TestMetaDataModule(),
-                new MetaDataSysModule()
-        ));
-        return modules;
+    @Before
+    public void prepare() {
+        TestingBlobTableInfo myBlobsTableInfo = TableDefinitions.createBlobTable(myBlobsIdent);
+        e = SQLExecutor.builder(clusterService).enableDefaultTables().addBlobTable(myBlobsTableInfo).build();
     }
 
     @Test
     public void testRefreshSystemTable() throws Exception {
-        RefreshTableAnalysis analysis = (RefreshTableAnalysis)analyze("refresh table sys.shards");
-        assertTrue(analysis.schema().systemSchema());
-        assertThat(analysis.table().ident().name(), is("shards"));
+        expectedException.expect(OperationOnInaccessibleRelationException.class);
+        expectedException.expectMessage("The relation \"sys.shards\" doesn't support or allow REFRESH " +
+                                        "operations, as it is read-only.");
+        e.analyze("refresh table sys.shards");
     }
 
     @Test
     public void testRefreshBlobTable() throws Exception {
-        RefreshTableAnalysis analysis = (RefreshTableAnalysis)analyze("refresh table blob.blobs");
-        assertThat(analysis.table().ident().schema(), is("blob"));
-        assertThat(analysis.table().ident().name(), is("blobs"));
-
+        expectedException.expect(OperationOnInaccessibleRelationException.class);
+        expectedException.expectMessage("The relation \"blob.blobs\" doesn't support or allow REFRESH " +
+                                        "operations.");
+        e.analyze("refresh table blob.blobs");
     }
 
     @Test
     public void testRefreshPartition() throws Exception {
-        PartitionName partition = new PartitionName("parted", Arrays.asList(new BytesRef("1395874800000")));
-        RefreshTableAnalysis analysis = (RefreshTableAnalysis)analyze("refresh table parted PARTITION (date=1395874800000)");
-        assertThat(analysis.table().ident().name(), is("parted"));
-        assertThat(analysis.partitionName().stringValue(), is(partition.stringValue()));
+        PartitionName partition = new PartitionName(new RelationName("doc", "parted"), Arrays.asList(new BytesRef("1395874800000")));
+        RefreshTableAnalyzedStatement analysis = e.analyze("refresh table parted PARTITION (date=1395874800000)");
+        assertThat(analysis.indexNames(), contains(".partitioned.parted.04732cpp6ks3ed1o60o30c1g"));
+    }
+
+    @Test(expected = RelationUnknown.class)
+    public void testRefreshMultipleTablesUnknown() throws Exception {
+        RefreshTableAnalyzedStatement analysis = e.analyze("refresh table parted, foo, bar");
+
+        assertThat(analysis.indexNames().size(), is(1));
+        assertThat(analysis.indexNames(), contains(Matchers.hasToString("doc.parted")));
     }
 
     @Test
-    public void testRefreshPartitionsParameter() throws Exception {
-        PartitionName partition = new PartitionName("parted", Arrays.asList(new BytesRef("1395874800000")));
-        RefreshTableAnalysis analysis = (RefreshTableAnalysis) analyze(
-                "refresh table parted PARTITION (date=?)", new Object[] {"1395874800000"});
-        assertThat(analysis.table().ident().name(), is("parted"));
-        assertThat(analysis.partitionName().stringValue(), is(partition.stringValue()));
-    }
-
-    @Test(expected = IllegalArgumentException.class)
     public void testRefreshInvalidPartitioned() throws Exception {
-        analyze("refresh table parted partition (invalid_column='hddsGNJHSGFEFZÜ')");
+        expectedException.expect(IllegalArgumentException.class);
+        e.analyze("refresh table parted partition (invalid_column='hddsGNJHSGFEFZÜ')");
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testRefreshNonPartitioned() throws Exception {
-        analyze("refresh table users partition (foo='n')");
+        expectedException.expect(IllegalArgumentException.class);
+        e.analyze("refresh table users partition (foo='n')");
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testRefreshSysPartitioned() throws Exception {
-        analyze("refresh table sys.shards partition (id='n')");
+        expectedException.expect(OperationOnInaccessibleRelationException.class);
+        expectedException.expectMessage("The relation \"sys.shards\" doesn't support or allow REFRESH" +
+                                        " operations, as it is read-only.");
+        e.analyze("refresh table sys.shards partition (id='n')");
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test
     public void testRefreshBlobPartitioned() throws Exception {
-        analyze("refresh table blob.blobs partition (n='n')");
+        expectedException.expect(OperationOnInaccessibleRelationException.class);
+        expectedException.expectMessage("The relation \"blob.blobs\" doesn't support or allow REFRESH " +
+                                        "operations.");
+        e.analyze("refresh table blob.blobs partition (n='n')");
     }
 
     @Test
     public void testRefreshPartitionedTableNullPartition() throws Exception {
-        RefreshTableAnalysis analysis = (RefreshTableAnalysis) analyze("refresh table parted PARTITION (date=null)");
-        assertNotNull(analysis.partitionName());
-        assertThat(analysis.partitionName().stringValue(), is(".partitioned.parted.0400"));
+        RefreshTableAnalyzedStatement analysis = e.analyze("refresh table parted PARTITION (date=null)");
+        assertThat(analysis.indexNames(), contains(Matchers.hasToString(".partitioned.parted.0400")));
     }
 }

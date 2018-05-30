@@ -21,145 +21,96 @@
 
 package io.crate.analyze;
 
-import com.google.common.collect.ImmutableList;
-import io.crate.PartitionName;
-import io.crate.metadata.FunctionInfo;
-import io.crate.metadata.MetaDataModule;
-import io.crate.metadata.doc.DocSchemaInfo;
-import io.crate.metadata.sys.MetaDataSysModule;
-import io.crate.metadata.table.SchemaInfo;
-import io.crate.operation.operator.EqOperator;
-import io.crate.operation.operator.OperatorModule;
-import io.crate.planner.RowGranularity;
-import io.crate.planner.symbol.Function;
-import io.crate.planner.symbol.Reference;
-import io.crate.sql.parser.SqlParser;
-import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.common.inject.Module;
-import org.hamcrest.Matchers;
-import org.hamcrest.core.IsInstanceOf;
+import io.crate.analyze.relations.DocTableRelation;
+import io.crate.exceptions.OperationOnInaccessibleRelationException;
+import io.crate.exceptions.RelationUnknown;
+import io.crate.expression.operator.EqOperator;
+import io.crate.expression.symbol.ParameterSymbol;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.table.TableInfo;
+import io.crate.test.integration.CrateDummyClusterServiceUnitTest;
+import io.crate.testing.SQLExecutor;
+import org.junit.Before;
 import org.junit.Test;
 
-import java.util.Arrays;
-import java.util.List;
+import static io.crate.analyze.TableDefinitions.USER_TABLE_IDENT;
+import static io.crate.testing.SymbolMatchers.isFunction;
+import static io.crate.testing.SymbolMatchers.isLiteral;
+import static io.crate.testing.SymbolMatchers.isReference;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.is;
 
-import static io.crate.testing.TestingHelpers.assertLiteralSymbol;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.core.Is.is;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+public class DeleteAnalyzerTest extends CrateDummyClusterServiceUnitTest {
 
-public class DeleteAnalyzerTest extends BaseAnalyzerTest {
+    private SQLExecutor e;
 
-    static class TestMetaDataModule extends MetaDataModule {
-        @Override
-        protected void bindSchemas() {
-            super.bindSchemas();
-            SchemaInfo schemaInfo = mock(SchemaInfo.class);
-            when(schemaInfo.getTableInfo(TEST_DOC_TABLE_IDENT.name())).thenReturn(userTableInfo);
-            when(schemaInfo.getTableInfo(TEST_PARTITIONED_TABLE_IDENT.name()))
-                    .thenReturn(TEST_PARTITIONED_TABLE_INFO);
-            schemaBinder.addBinding(DocSchemaInfo.NAME).toInstance(schemaInfo);
-        }
-    }
-
-    @Override
-    protected List<Module> getModules() {
-        List<Module> modules = super.getModules();
-        modules.addAll(Arrays.<Module>asList(
-                new TestModule(),
-                new TestMetaDataModule(),
-                new MetaDataSysModule(),
-                new OperatorModule())
-        );
-        return modules;
-    }
-
-    protected DeleteAnalysis analyze(String statement, Object[][] bulkArgs) {
-        return (DeleteAnalysis) analyzer.analyze(
-                SqlParser.createStatement(statement), new Object[0], bulkArgs);
-    }
-
-    protected DeleteAnalysis.NestedDeleteAnalysis analyze(String statement) {
-        DeleteAnalysis analysis = (DeleteAnalysis) analyzer.analyze(SqlParser.createStatement(statement));
-        return analysis.nestedAnalysis().get(0);
+    @Before
+    public void prepare() {
+        e = SQLExecutor.builder(clusterService).enableDefaultTables().build();
     }
 
     @Test
     public void testDeleteWhere() throws Exception {
-        DeleteAnalysis.NestedDeleteAnalysis analysis = analyze("delete from users where name='Trillian'");
-        assertEquals(TEST_DOC_TABLE_IDENT, analysis.table().ident());
+        AnalyzedDeleteStatement delete = e.analyze("delete from users where name='Trillian'");
+        DocTableRelation tableRelation = delete.relation();
+        TableInfo tableInfo = tableRelation.tableInfo();
+        assertThat(USER_TABLE_IDENT, equalTo(tableInfo.ident()));
+        assertThat(tableInfo.rowGranularity(), is(RowGranularity.DOC));
 
-        assertThat(analysis.rowGranularity(), is(RowGranularity.DOC));
-
-        Function whereClause = (Function)analysis.whereClause().query();
-        assertEquals(EqOperator.NAME, whereClause.info().ident().name());
-        assertFalse(whereClause.info().type() == FunctionInfo.Type.AGGREGATE);
-
-        assertThat(whereClause.arguments().get(0), IsInstanceOf.instanceOf(Reference.class));
-
-        assertLiteralSymbol(whereClause.arguments().get(1), "Trillian");
+        assertThat(delete.query(), isFunction(EqOperator.NAME, isReference("name"), isLiteral("Trillian")));
     }
 
-    @Test( expected = UnsupportedOperationException.class)
+    @Test
     public void testDeleteSystemTable() throws Exception {
-        analyze("delete from sys.nodes where name='Trillian'");
+        expectedException.expect(OperationOnInaccessibleRelationException.class);
+        expectedException.expectMessage("The relation \"sys.nodes\" doesn't support or allow DELETE "+
+                                        "operations, as it is read-only.");
+        e.analyze("delete from sys.nodes where name='Trillian'");
     }
 
-    @Test( expected = UnsupportedOperationException.class )
+    @Test
     public void testDeleteWhereSysColumn() throws Exception {
-        analyze("delete from users where sys.nodes.id = 'node_1'");
+        expectedException.expect(RelationUnknown.class);
+        expectedException.expectMessage("Relation 'sys.nodes' unknown");
+        e.analyze("delete from users where sys.nodes.id = 'node_1'");
     }
 
     @Test
     public void testDeleteWherePartitionedByColumn() throws Exception {
-        DeleteAnalysis.NestedDeleteAnalysis analysis = analyze("delete from parted where date = 1395874800000");
-        assertThat(analysis.whereClause().hasQuery(), Matchers.is(false));
-        assertThat(analysis.whereClause().noMatch(), Matchers.is(false));
-        assertEquals(ImmutableList.of(
-                        new PartitionName("parted", Arrays.asList(new BytesRef("1395874800000"))).stringValue()),
-                analysis.whereClause().partitions());
-
-        analysis = analyze("delete from parted");
-        assertThat(analysis.whereClause().hasQuery(), Matchers.is(false));
-        assertThat(analysis.whereClause().noMatch(), Matchers.is(false));
-        assertEquals(ImmutableList.<String>of(), analysis.whereClause().partitions());
+        AnalyzedDeleteStatement delete = e.analyze("delete from parted where date = 1395874800000");
+        assertThat(delete.query(), isFunction(EqOperator.NAME, isReference("date"), isLiteral(1395874800000L)));
     }
 
     @Test
     public void testDeleteTableAlias() throws Exception {
-        DeleteAnalysis.NestedDeleteAnalysis expectedAnalysis = analyze(
-                "delete from users where name='Trillian'");
-        DeleteAnalysis.NestedDeleteAnalysis actualAnalysis = analyze(
-                "delete from users as u where u.name='Trillian'");
+        AnalyzedDeleteStatement expectedStatement = e.analyze("delete from users where name='Trillian'");
+        AnalyzedDeleteStatement actualStatement = e.analyze("delete from users as u where u.name='Trillian'");
 
-        assertEquals(actualAnalysis.tableAlias(), "u");
-        assertEquals(
-                ((Function)expectedAnalysis.whereClause().query()).arguments().get(0),
-                ((Function)actualAnalysis.whereClause().query()).arguments().get(0)
-        );
+        assertThat(actualStatement.relation().tableInfo(), equalTo(expectedStatement.relation().tableInfo()));
+        assertThat(actualStatement.query(), equalTo(expectedStatement.query()));
     }
 
     @Test(expected = IllegalArgumentException.class)
     public void testWhereClauseObjectArrayField() throws Exception {
-        analyze("delete from users where friends['id'] = 5");
+        e.analyze("delete from users where friends['id'] = 5");
     }
 
     @Test
     public void testBulkDelete() throws Exception {
-        DeleteAnalysis analysis = analyze("delete from users where id = ?", new Object[][]{
-                new Object[]{1},
-                new Object[]{2},
-                new Object[]{3},
-                new Object[]{4},
+        AnalyzedDeleteStatement delete = e.analyze("delete from users where id = ?", new Object[][]{
+            new Object[]{1},
+            new Object[]{2},
+            new Object[]{3},
+            new Object[]{4},
         });
-        assertThat(analysis.nestedAnalysis().size(), is(4));
+        assertThat(delete.query(), isFunction(EqOperator.NAME, isReference("id"), instanceOf(ParameterSymbol.class)));
+    }
 
-        DeleteAnalysis.NestedDeleteAnalysis firstAnalysis = analysis.nestedAnalysis().get(0);
-        assertThat(firstAnalysis.ids().get(0), is("1"));
-        DeleteAnalysis.NestedDeleteAnalysis secondAnalysis = analysis.nestedAnalysis().get(1);
-        assertThat(secondAnalysis.ids().get(0), is("2"));
+    @Test
+    public void testSensibleErrorOnDeleteComplexRelation() throws Exception {
+        expectedException.expect(UnsupportedOperationException.class);
+        expectedException.expectMessage("Cannot delete from relations other than base tables");
+        e.analyze("delete from (select * from users) u");
     }
 }

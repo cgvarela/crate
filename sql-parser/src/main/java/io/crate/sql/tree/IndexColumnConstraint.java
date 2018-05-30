@@ -21,9 +21,8 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
-
-import javax.annotation.Nullable;
 
 public class IndexColumnConstraint extends ColumnConstraint {
 
@@ -32,9 +31,9 @@ public class IndexColumnConstraint extends ColumnConstraint {
     private final String indexMethod;
     private final GenericProperties properties;
 
-    public IndexColumnConstraint(String indexMethod, @Nullable GenericProperties properties) {
+    public IndexColumnConstraint(String indexMethod, GenericProperties properties) {
         this.indexMethod = indexMethod;
-        this.properties = Objects.firstNonNull(properties, GenericProperties.EMPTY);
+        this.properties = properties;
     }
 
     public String indexMethod() {
@@ -65,10 +64,10 @@ public class IndexColumnConstraint extends ColumnConstraint {
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("method", indexMethod)
-                .add("properties", properties)
-                .toString();
+        return MoreObjects.toStringHelper(this)
+            .add("method", indexMethod)
+            .add("properties", properties)
+            .toString();
     }
 
     @Override

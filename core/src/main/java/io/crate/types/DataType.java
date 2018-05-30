@@ -27,22 +27,99 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Streamable;
 
 import java.io.IOException;
+import java.util.Comparator;
+import java.util.Objects;
+import java.util.Set;
 
 public abstract class DataType<T> implements Comparable, Streamable {
 
+    /**
+     * Type precedence ids which help to decide when a type can be cast
+     * into another type without losing information (upcasting).
+     *
+     * Lower ordinal => Lower precedence
+     * Higher ordinal => Higher precedence
+     *
+     * Precedence list inspired by
+     * https://docs.microsoft.com/en-us/sql/t-sql/data-types/data-type-precedence-transact-sql
+     *
+     */
+    public enum Precedence {
+        NotSupportedType,
+        UndefinedType,
+        LiteralType,
+        StringType,
+        ByteType,
+        BooleanType,
+        ShortType,
+        IntegerType,
+        LongType,
+        FloatType,
+        DoubleType,
+        ArrayType,
+        SetType,
+        TableType,
+        GeoPointType,
+        ObjectType,
+        GeoShapeType,
+        Custom
+    }
+
     public abstract int id();
+
+    /**
+     * Returns the precedence of the type which determines whether the
+     * type should be preferred (higher precedence) or converted (lower
+     * precedence) during type conversions.
+     */
+    public abstract Precedence precedence();
+
     public abstract String getName();
+
     public abstract Streamer<?> streamer();
+
     public abstract T value(Object value) throws IllegalArgumentException, ClassCastException;
+
     public abstract int compareValueTo(T val1, T val2);
 
     /**
+     * Returns true if this DataType precedes the supplied DataType.
+     * @param other The other type to compare against.
+     * @return True if the current type precedes, false otherwise.
+     */
+    public boolean precedes(DataType other) {
+        return this.precedence().ordinal() > other.precedence().ordinal();
+    }
+
+    /**
      * check whether a value of this type is convertible to <code>other</code>
+     *
      * @param other the DataType to check conversion to
      * @return true or false
      */
     public boolean isConvertableTo(DataType other) {
-        return this.equals(other) || DataTypes.ALLOWED_CONVERSIONS.get(id()).contains(other);
+        if (this.equals(other)) {
+            return true;
+        }
+        Set<DataType> possibleConversions = DataTypes.ALLOWED_CONVERSIONS.get(id());
+        //noinspection SimplifiableIfStatement
+        if (possibleConversions == null) {
+            return false;
+        }
+        return possibleConversions.contains(other);
+    }
+
+    static <T> int nullSafeCompareValueTo(T val1, T val2, Comparator<T> cmp) {
+        if (val1 == null) {
+            if (val2 == null) {
+                return 0;
+            }
+            return -1;
+        }
+        if (val2 == null) {
+            return 1;
+        }
+        return Objects.compare(val1, val2, cmp);
     }
 
     public int hashCode() {
@@ -60,7 +137,7 @@ public abstract class DataType<T> implements Comparable, Streamable {
     @Override
     public int compareTo(Object o) {
         if (!(o instanceof DataType)) return -1;
-        return Integer.compare(id(), ((DataType)o).id());
+        return Integer.compare(id(), ((DataType) o).id());
     }
 
     @Override

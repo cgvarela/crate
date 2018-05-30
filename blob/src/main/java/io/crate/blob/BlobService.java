@@ -22,87 +22,100 @@
 package io.crate.blob;
 
 import io.crate.blob.exceptions.MissingHTTPEndpointException;
-import io.crate.blob.pending_transfer.BlobHeadRequestHandler;
-import io.crate.blob.v2.BlobIndices;
+import io.crate.blob.recovery.BlobRecoveryHandler;
+import io.crate.blob.transfer.BlobHeadRequestHandler;
+import io.crate.blob.v2.BlobIndex;
+import io.crate.blob.v2.BlobIndicesService;
+import io.crate.plugin.PipelineRegistry;
+import io.crate.protocols.http.HttpBlobHandler;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.cluster.ClusterService;
+import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.cluster.routing.ShardIterator;
 import org.elasticsearch.cluster.routing.ShardRouting;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.inject.Injector;
-import org.elasticsearch.common.logging.ESLogger;
-import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.http.HttpServer;
-import org.elasticsearch.indices.recovery.BlobRecoverySource;
+import org.elasticsearch.index.shard.IndexShard;
+import org.elasticsearch.indices.recovery.PeerRecoverySourceService;
+import org.elasticsearch.indices.recovery.RecoverySourceHandler;
+import org.elasticsearch.indices.recovery.RecoverySourceHandlerProvider;
+import org.elasticsearch.indices.recovery.RemoteRecoveryTargetHandler;
+import org.elasticsearch.indices.recovery.StartRecoveryRequest;
 import org.elasticsearch.transport.TransportService;
 
-import java.io.File;
-import java.util.HashSet;
-import java.util.Set;
+public class BlobService extends AbstractLifecycleComponent {
 
-public class BlobService extends AbstractLifecycleComponent<BlobService> {
-
-    private final Injector injector;
+    private final BlobIndicesService blobIndicesService;
     private final BlobHeadRequestHandler blobHeadRequestHandler;
-
+    private final PeerRecoverySourceService peerRecoverySourceService;
     private final ClusterService clusterService;
-    private final BlobEnvironment blobEnvironment;
+    private final TransportService transportService;
+    private final BlobTransferTarget blobTransferTarget;
+    private final Client client;
+    private final PipelineRegistry piplineRegistry;
 
     @Inject
     public BlobService(Settings settings,
-            ClusterService clusterService, Injector injector,
-            BlobHeadRequestHandler blobHeadRequestHandler,
-            BlobEnvironment blobEnvironment) {
+                       ClusterService clusterService,
+                       BlobIndicesService blobIndicesService,
+                       BlobHeadRequestHandler blobHeadRequestHandler,
+                       PeerRecoverySourceService peerRecoverySourceService,
+                       TransportService transportService,
+                       BlobTransferTarget blobTransferTarget,
+                       Client client,
+                       PipelineRegistry pipelineRegistry) {
         super(settings);
         this.clusterService = clusterService;
-        this.injector = injector;
+        this.blobIndicesService = blobIndicesService;
         this.blobHeadRequestHandler = blobHeadRequestHandler;
-        this.blobEnvironment = blobEnvironment;
+        this.peerRecoverySourceService = peerRecoverySourceService;
+        this.transportService = transportService;
+        this.blobTransferTarget = blobTransferTarget;
+        this.client = client;
+        this.piplineRegistry = pipelineRegistry;
     }
 
     public RemoteDigestBlob newBlob(String index, String digest) {
-        return new RemoteDigestBlob(this, index, digest);
-    }
-
-    public Injector getInjector() {
-        return injector;
+        assert client != null : "client for remote digest blob must not be null";
+        return new RemoteDigestBlob(client, index, digest);
     }
 
     @Override
     protected void doStart() throws ElasticsearchException {
-        logger.info("BlobService.doStart() {}", this);
-
-        // suppress warning about replaced recovery handler
-        ESLogger transportServiceLogger = Loggers.getLogger(TransportService.class);
-        String previousLevel = transportServiceLogger.getLevel();
-        transportServiceLogger.setLevel("ERROR");
-
-        injector.getInstance(BlobRecoverySource.class).registerHandler();
-
-        transportServiceLogger.setLevel(previousLevel);
-
-        // validate the optional blob path setting
-        String globalBlobPathPrefix = settings.get(BlobEnvironment.SETTING_BLOBS_PATH);
-        if (globalBlobPathPrefix != null) {
-            blobEnvironment.blobsPath(new File(globalBlobPathPrefix));
-        }
+        piplineRegistry.addBefore(
+            new PipelineRegistry.ChannelPipelineItem(
+                "aggregator", "blob_handler", () -> new HttpBlobHandler(this, blobIndicesService))
+        );
 
         blobHeadRequestHandler.registerHandler();
+        peerRecoverySourceService.registerRecoverySourceHandlerProvider(new RecoverySourceHandlerProvider() {
 
-        // by default the http server is started after the discovery service.
-        // For the BlobService this is too late.
-
-        // The HttpServer has to be started before so that the boundAddress
-        // can be added to DiscoveryNodes - this is required for the redirect logic.
-        if (settings.getAsBoolean("http.enabled", true)) {
-            injector.getInstance(HttpServer.class).start();
-        } else {
-            logger.warn("Http server should be enabled for blob support");
-        }
+            @Override
+            public RecoverySourceHandler get(IndexShard shard,
+                                             StartRecoveryRequest request,
+                                             RemoteRecoveryTargetHandler recoveryTarget,
+                                             int fileChunkSizeInBytes,
+                                             Settings settings,
+                                             Logger logger) {
+                if (!BlobIndex.isBlobIndex(shard.shardId().getIndexName())) {
+                    return null;
+                }
+                return new BlobRecoveryHandler(
+                    shard,
+                    recoveryTarget,
+                    request,
+                    fileChunkSizeInBytes,
+                    settings,
+                    transportService,
+                    blobTransferTarget,
+                    blobIndicesService
+                );
+            }
+        });
     }
 
     @Override
@@ -120,34 +133,26 @@ public class BlobService extends AbstractLifecycleComponent<BlobService> {
      */
     public String getRedirectAddress(String index, String digest) throws MissingHTTPEndpointException {
         ShardIterator shards = clusterService.operationRouting().getShards(
-                clusterService.state(), index, null, null, digest, "_local");
+            clusterService.state(), index, null, digest, "_local");
 
+        String localNodeId = clusterService.localNode().getId();
+        DiscoveryNodes nodes = clusterService.state().getNodes();
         ShardRouting shard;
-        Set<String> nodeIds = new HashSet<>();
-
-        // check if one of the shards is on the current node;
         while ((shard = shards.nextOrNull()) != null) {
             if (!shard.active()) {
                 continue;
             }
-            if (shard.currentNodeId().equals(clusterService.localNode().getId())) {
+            if (shard.currentNodeId().equals(localNodeId)) {
+                // no redirect required if the shard is on this node
                 return null;
             }
-            nodeIds.add(shard.currentNodeId());
-        }
 
-        DiscoveryNode node;
-        DiscoveryNodes nodes = clusterService.state().getNodes();
-        for (String nodeId : nodeIds) {
-            node = nodes.get(nodeId);
-            if (node.getAttributes().containsKey("http_address")) {
-                return node.getAttributes().get("http_address") + "/_blobs/" + BlobIndices.indexName(index) + "/" + digest;
+            DiscoveryNode node = nodes.get(shard.currentNodeId());
+            String httpAddress = node.getAttributes().get("http_address");
+            if (httpAddress != null) {
+                return httpAddress + "/_blobs/" + BlobIndex.stripPrefix(index) + "/" + digest;
             }
-            // else:
-            // No HttpServer on node,
-            // okay if there are replica nodes with httpServer available
         }
-
         throw new MissingHTTPEndpointException("Can't find a suitable http server to serve the blob");
     }
 

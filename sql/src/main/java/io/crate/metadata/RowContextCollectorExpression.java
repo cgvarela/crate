@@ -21,28 +21,39 @@
 
 package io.crate.metadata;
 
-import io.crate.operation.Input;
+import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.common.lucene.BytesRefs;
 
-public abstract class RowContextCollectorExpression<R, T> implements ReferenceImplementation, Input<T> {
+import java.util.function.Function;
 
-    protected final ReferenceInfo info;
-    protected R row;
+public abstract class RowContextCollectorExpression<TRow, TReturnValue> implements RowCollectExpression<TRow, TReturnValue> {
 
-    public RowContextCollectorExpression(ReferenceInfo info) {
-        this.info = info;
-    }
+    protected TRow row;
 
     @Override
-    public ReferenceInfo info() {
-        return info;
-    }
-
-    @Override
-    public ReferenceImplementation getChildImplementation(String name) {
-        return null;
-    }
-
-    public void setNextRow(R row) {
+    public void setNextRow(TRow row) {
         this.row = row;
+    }
+
+    public static <TRow, TReturnValue> RowCollectExpression<TRow, TReturnValue> forFunction(Function<TRow, TReturnValue> fun) {
+        return new FuncExpression<>(fun);
+    }
+
+    public static <TRow> RowCollectExpression<TRow, BytesRef> objToBytesRef(Function<TRow, Object> fun) {
+        return forFunction(fun.andThen(BytesRefs::toBytesRef));
+    }
+
+    private static class FuncExpression<TRow, TReturnVal> extends RowContextCollectorExpression<TRow, TReturnVal> {
+
+        private final Function<TRow, TReturnVal> f;
+
+        FuncExpression(Function<TRow, TReturnVal> f) {
+            this.f = f;
+        }
+
+        @Override
+        public TReturnVal value() {
+            return f.apply(row);
+        }
     }
 }

@@ -21,32 +21,30 @@
 
 package io.crate.metadata;
 
-import io.crate.operation.reference.partitioned.PartitionExpression;
+import io.crate.expression.reference.ReferenceResolver;
+import io.crate.expression.reference.partitioned.PartitionExpression;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class PartitionReferenceResolver implements ReferenceResolver {
+public class PartitionReferenceResolver implements ReferenceResolver<PartitionExpression> {
 
-    private final Map<ReferenceIdent, PartitionExpression> expressionMap = new HashMap<>();
-    private final ReferenceResolver fallbackResolver;
+    private final Map<ReferenceIdent, PartitionExpression> expressionMap;
     private final List<PartitionExpression> partitionExpressions;
 
-    public PartitionReferenceResolver(ReferenceResolver fallbackReferenceResolver,
-                                      List<PartitionExpression> partitionExpressions) {
-        this.fallbackResolver = fallbackReferenceResolver;
+    public PartitionReferenceResolver(List<PartitionExpression> partitionExpressions) {
         this.partitionExpressions = partitionExpressions;
+        this.expressionMap = new HashMap<>(partitionExpressions.size(), 1.0f);
         for (PartitionExpression partitionExpression : partitionExpressions) {
-            expressionMap.put(partitionExpression.info().ident(), partitionExpression);
+            expressionMap.put(partitionExpression.reference().ident(), partitionExpression);
         }
     }
 
     @Override
-    public ReferenceImplementation getImplementation(ReferenceIdent ident) {
-        PartitionExpression expression = expressionMap.get(ident);
-        assert expression != null || fallbackResolver.getImplementation(ident) == null
-                : "granularity < PARTITION should have been resolved already";
+    public PartitionExpression getImplementation(Reference ref) {
+        PartitionExpression expression = expressionMap.get(ref.ident());
+        assert expression != null : "granularity < PARTITION should have been resolved already";
         return expression;
     }
 

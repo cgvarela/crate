@@ -27,21 +27,28 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 
-public class UndefinedType extends DataType<Void> implements DataTypeFactory, Streamer<Void> {
+public class UndefinedType extends DataType<Object> implements Streamer<Object> {
 
     public static final int ID = 0;
 
     public static final UndefinedType INSTANCE = new UndefinedType();
-    private UndefinedType() {}
+
+    private UndefinedType() {
+    }
 
     @Override
     public int id() {
-        return 0;
+        return ID;
+    }
+
+    @Override
+    public Precedence precedence() {
+        return Precedence.UndefinedType;
     }
 
     @Override
     public String getName() {
-        return "null";
+        return "undefined";
     }
 
     @Override
@@ -50,8 +57,8 @@ public class UndefinedType extends DataType<Void> implements DataTypeFactory, St
     }
 
     @Override
-    public Void value(Object value) {
-        return null;
+    public Object value(Object value) {
+        return value;
     }
 
     @Override
@@ -60,21 +67,17 @@ public class UndefinedType extends DataType<Void> implements DataTypeFactory, St
     }
 
     @Override
-    public int compareValueTo(Void val1, Void val2) {
+    public int compareValueTo(Object val1, Object val2) {
         return 0;
     }
 
     @Override
-    public DataType<?> create() {
-        return INSTANCE;
-    }
-
-    @Override
-    public Void readValueFrom(StreamInput in) throws IOException {
-        return null;
+    public Object readValueFrom(StreamInput in) throws IOException {
+        return in.readGenericValue();
     }
 
     @Override
     public void writeValueTo(StreamOutput out, Object v) throws IOException {
+        out.writeGenericValue(v);
     }
 }

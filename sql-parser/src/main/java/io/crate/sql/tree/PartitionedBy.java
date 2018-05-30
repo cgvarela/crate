@@ -21,18 +21,17 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
-import com.google.common.collect.ImmutableList;
 
-import javax.annotation.Nullable;
 import java.util.List;
 
 public class PartitionedBy extends CrateTableOption {
 
     private final List<Expression> columns;
 
-    public PartitionedBy(@Nullable List<Expression> columns) {
-        this.columns = Objects.firstNonNull(columns, ImmutableList.<Expression>of());
+    public PartitionedBy(List<Expression> columns) {
+        this.columns = columns;
     }
 
     public List<Expression> columns() {
@@ -58,7 +57,7 @@ public class PartitionedBy extends CrateTableOption {
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this).add("columns", columns).toString();
+        return MoreObjects.toStringHelper(this).add("columns", columns).toString();
     }
 
     @Override

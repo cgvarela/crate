@@ -28,16 +28,22 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 
-public class ShortType extends DataType<Short> implements DataTypeFactory, Streamer<Short> {
+public class ShortType extends DataType<Short> implements Streamer<Short>, FixedWidthType {
 
     public static final ShortType INSTANCE = new ShortType();
     public static final int ID = 8;
 
-    private ShortType() {}
+    private ShortType() {
+    }
 
     @Override
     public int id() {
         return ID;
+    }
+
+    @Override
+    public Precedence precedence() {
+        return Precedence.ShortType;
     }
 
     @Override
@@ -55,27 +61,25 @@ public class ShortType extends DataType<Short> implements DataTypeFactory, Strea
         if (value == null) {
             return null;
         }
+        if (value instanceof Short) {
+            return (Short) value;
+        }
         if (value instanceof String) {
-            return Short.valueOf((String)value);
+            return Short.valueOf((String) value);
         }
         if (value instanceof BytesRef) {
-            return Short.valueOf(((BytesRef)value).utf8ToString());
+            return Short.valueOf(((BytesRef) value).utf8ToString());
         }
-        int intVal = ((Number)value).intValue();
+        int intVal = ((Number) value).intValue();
         if (intVal < Short.MIN_VALUE || Short.MAX_VALUE < intVal) {
             throw new IllegalArgumentException("short value out of range: " + intVal);
         }
-        return ((Number)value).shortValue();
+        return ((Number) value).shortValue();
     }
 
     @Override
     public int compareValueTo(Short val1, Short val2) {
-        return Short.compare(val1, val2);
-    }
-
-    @Override
-    public DataType<?> create() {
-        return INSTANCE;
+        return nullSafeCompareValueTo(val1, val2, Short::compare);
     }
 
     @Override
@@ -89,6 +93,11 @@ public class ShortType extends DataType<Short> implements DataTypeFactory, Strea
         if (v != null) {
             out.writeShort(((Number) v).shortValue());
         }
+    }
+
+    @Override
+    public int fixedSize() {
+        return 16; // object overhead + 2 byte for short + 6 byte padding
     }
 }
 

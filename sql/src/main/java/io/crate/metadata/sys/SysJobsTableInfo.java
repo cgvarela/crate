@@ -22,54 +22,70 @@
 package io.crate.metadata.sys;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import io.crate.action.sql.SessionContext;
 import io.crate.analyze.WhereClause;
-import io.crate.metadata.*;
-import io.crate.planner.RowGranularity;
-import io.crate.types.DataType;
+import io.crate.expression.reference.sys.job.JobContext;
+import io.crate.metadata.ColumnIdent;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.Routing;
+import io.crate.metadata.RoutingProvider;
+import io.crate.metadata.RowContextCollectorExpression;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.expressions.RowCollectExpressionFactory;
+import io.crate.metadata.table.ColumnRegistrar;
+import io.crate.metadata.table.StaticTableInfo;
 import io.crate.types.DataTypes;
-import org.elasticsearch.cluster.ClusterService;
-import org.elasticsearch.common.inject.Inject;
+import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.cluster.node.DiscoveryNode;
 
-import java.util.*;
+import java.util.function.Supplier;
 
-public class SysJobsTableInfo extends SysTableInfo {
+public class SysJobsTableInfo extends StaticTableInfo {
 
-    public static final TableIdent IDENT = new TableIdent(SCHEMA, "jobs");
-    private static final String[] PARTITIONS = new String[]{IDENT.name()};
+    public static final RelationName IDENT = new RelationName(SysSchemaInfo.NAME, "jobs");
+    private static final ImmutableList<ColumnIdent> PRIMARY_KEY = ImmutableList.of(Columns.ID);
 
-    private static final ImmutableList<ColumnIdent> primaryKey = ImmutableList.of(new ColumnIdent("id"));
-
-    public static final Map<ColumnIdent, ReferenceInfo> INFOS = new LinkedHashMap<>();
-    private static final LinkedHashSet<ReferenceInfo> columns = new LinkedHashSet<>();
-
-    static {
-        register("id", DataTypes.STRING, null);
-        register("stmt", DataTypes.STRING, null);
-        register("started", DataTypes.TIMESTAMP, null);
+    public static class Columns {
+        public static final ColumnIdent ID = new ColumnIdent("id");
+        static final ColumnIdent USERNAME = new ColumnIdent("username");
+        static final ColumnIdent STMT = new ColumnIdent("stmt");
+        public static final ColumnIdent STARTED = new ColumnIdent("started");
+        static final ColumnIdent NODE = new ColumnIdent("node");
+        static final ColumnIdent NODE_ID = new ColumnIdent("node", "id");
+        static final ColumnIdent NODE_NAME = new ColumnIdent("node", "name");
     }
 
-    @Inject
-    public SysJobsTableInfo(ClusterService service, SysSchemaInfo sysSchemaInfo) {
-        super(service, sysSchemaInfo);
+    public static ImmutableMap<ColumnIdent, RowCollectExpressionFactory<JobContext>> expressions(Supplier<DiscoveryNode> localNode) {
+        return ImmutableMap.<ColumnIdent, RowCollectExpressionFactory<JobContext>>builder()
+            .put(SysJobsTableInfo.Columns.ID,
+                () -> RowContextCollectorExpression.objToBytesRef(JobContext::id))
+            .put(SysJobsTableInfo.Columns.USERNAME,
+                () -> RowContextCollectorExpression.objToBytesRef(JobContext::username))
+            .put(SysJobsTableInfo.Columns.STMT,
+                () -> RowContextCollectorExpression.objToBytesRef(JobContext::stmt))
+            .put(SysJobsTableInfo.Columns.STARTED,
+                () -> RowContextCollectorExpression.forFunction(JobContext::started))
+            .put(Columns.NODE, () -> RowContextCollectorExpression.forFunction(ignored -> ImmutableMap.of(
+                "id", new BytesRef(localNode.get().getId()),
+                "name", new BytesRef(localNode.get().getName())
+            )))
+            .put(Columns.NODE_ID, () -> RowContextCollectorExpression.forFunction(ignored -> new BytesRef(localNode.get().getId())))
+            .put(Columns.NODE_NAME, () -> RowContextCollectorExpression.forFunction(ignored -> new BytesRef(localNode.get().getName())))
+            .build();
     }
 
-    private static ReferenceInfo register(String column, DataType type, List<String> path) {
-        ReferenceInfo info = new ReferenceInfo(new ReferenceIdent(IDENT, column, path), RowGranularity.DOC, type);
-        if (info.ident().isColumn()) {
-            columns.add(info);
-        }
-        INFOS.put(info.ident().columnIdent(), info);
-        return info;
-    }
-
-    @Override
-    public ReferenceInfo getReferenceInfo(ColumnIdent columnIdent) {
-        return INFOS.get(columnIdent);
-    }
-
-    @Override
-    public Collection<ReferenceInfo> columns() {
-        return columns;
+    SysJobsTableInfo() {
+        super(IDENT, new ColumnRegistrar(IDENT, RowGranularity.DOC)
+                .register(Columns.ID, DataTypes.STRING)
+                .register(Columns.USERNAME, DataTypes.STRING)
+                .register(Columns.NODE, DataTypes.OBJECT)
+                .register(Columns.NODE_ID, DataTypes.STRING)
+                .register(Columns.NODE_NAME, DataTypes.STRING)
+                .register(Columns.STMT, DataTypes.STRING)
+                .register(Columns.STARTED, DataTypes.TIMESTAMP),
+            PRIMARY_KEY);
     }
 
     @Override
@@ -78,27 +94,16 @@ public class SysJobsTableInfo extends SysTableInfo {
     }
 
     @Override
-    public TableIdent ident() {
+    public RelationName ident() {
         return IDENT;
     }
 
     @Override
-    public Routing getRouting(WhereClause whereClause) {
-        return tableRouting(whereClause);
-    }
-
-    @Override
-    public List<ColumnIdent> primaryKey() {
-        return primaryKey;
-    }
-
-    @Override
-    public String[] concreteIndices() {
-        return PARTITIONS;
-    }
-
-    @Override
-    public Iterator<ReferenceInfo> iterator() {
-        return INFOS.values().iterator();
+    public Routing getRouting(ClusterState clusterState,
+                              RoutingProvider routingProvider,
+                              WhereClause whereClause,
+                              RoutingProvider.ShardSelection shardSelection,
+                              SessionContext sessionContext) {
+        return Routing.forTableOnAllNodes(IDENT, clusterState.getNodes());
     }
 }

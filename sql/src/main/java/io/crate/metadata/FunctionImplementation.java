@@ -21,11 +21,30 @@
 
 package io.crate.metadata;
 
-import io.crate.planner.symbol.Symbol;
+import io.crate.expression.symbol.Function;
+import io.crate.expression.symbol.Symbol;
 
-public interface FunctionImplementation<SymbolType extends Symbol> {
+import javax.annotation.Nullable;
 
-    public abstract FunctionInfo info();
+/**
+ * Base interface for function implementations.
+ */
+public interface FunctionImplementation {
 
-    public Symbol normalizeSymbol(SymbolType symbol);
+    /**
+     * Provides meta information about this function implementation.
+     */
+    FunctionInfo info();
+
+    /**
+     * Normalize a symbol into a simplified form.
+     * This may return the symbol as is if it cannot be normalized.
+     *
+     * @param transactionContext context which is shared across normalizeSymbol calls during a statement-lifecycle.
+     *                This will only be present if normalizeSymbol is called on the handler node.
+     *                normalizeSymbol calls during execution won't receive a StmtCtx
+     */
+    default Symbol normalizeSymbol(Function function, @Nullable TransactionContext transactionContext) {
+        return function;
+    }
 }

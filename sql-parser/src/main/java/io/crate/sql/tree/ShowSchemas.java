@@ -21,50 +21,58 @@
 
 package io.crate.sql.tree;
 
-import com.google.common.base.Objects;
-import com.google.common.base.Optional;
+import com.google.common.base.MoreObjects;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import javax.annotation.Nullable;
+import java.util.Objects;
+import java.util.Optional;
 
-public class ShowSchemas
-        extends Statement
-{
-    private final Optional<String> catalog;
+public class ShowSchemas extends Statement {
 
-    public ShowSchemas(Optional<String> catalog)
-    {
-        this.catalog = checkNotNull(catalog, "catalog is null");
+    @Nullable
+    private final String likePattern;
+    private final Optional<Expression> whereExpression;
+
+    public ShowSchemas(@Nullable String likePattern,
+                       Optional<Expression> whereExpr) {
+        this.likePattern = likePattern;
+        this.whereExpression = whereExpr;
     }
 
-    public Optional<String> getCatalog()
-    {
-        return catalog;
+    @Nullable
+    public String likePattern() {
+        return likePattern;
+    }
+
+    public Optional<Expression> whereExpression() {
+        return whereExpression;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitShowSchemas(this, context);
     }
 
     @Override
-    public int hashCode()
-    {
-        return 0;
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        ShowSchemas that = (ShowSchemas) o;
+        return Objects.equals(likePattern, that.likePattern) &&
+            Objects.equals(whereExpression, that.whereExpression);
     }
 
     @Override
-    public boolean equals(Object obj)
-    {
-        if (this == obj) {
-            return true;
-        }
-        return (obj != null) && (getClass() == obj.getClass());
+    public int hashCode() {
+        return Objects.hash(likePattern, whereExpression);
     }
 
     @Override
-    public String toString()
-    {
-        return Objects.toStringHelper(this).toString();
+    public String toString() {
+        return MoreObjects.toStringHelper(this)
+            .add("likePattern", likePattern)
+            .add("whereExpression", whereExpression)
+            .toString();
     }
+
 }

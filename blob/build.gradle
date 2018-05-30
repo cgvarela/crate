@@ -1,34 +1,16 @@
-apply plugin: 'java'
+apply from: "$rootDir/gradle/javaModule.gradle"
 
 archivesBaseName = 'crate-blob'
 
-// we do not want to have elasticsearch here, since we provide it in :es
-configurations {
-    all*.exclude group: 'org.elasticsearch'
-}
-
-evaluationDependsOn(':testing')
-
 dependencies {
-    compile project(':es')
     compile project(':core')
-    testCompile project(':testing')
+    compile project(':http')
+    compile project(':es:es-transport')
+    testCompile project(':integration-testing')
 }
 
 test {
-    // show standard out and standard error of the test JVM(s) on the console
-    testLogging.showStandardStreams = true
-
-    jacoco {
-        excludes = [ "*Test*" ]
-    }
+    testLogging.exceptionFormat = 'full'
+    jacoco.excludes = ["*Test*"]
 }
 
-sourceSets {
-    test {
-        resources {
-            srcDir 'src/test/java'
-            include '**/*.rst'
-        }
-    }
-}

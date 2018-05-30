@@ -28,28 +28,28 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-public class SQLBulkArgsParseElement extends SQLArgsParseElement implements SQLParseElement {
+class SQLBulkArgsParseElement extends SQLArgsParseElement implements SQLParseElement {
 
     @Override
-    public void parse(XContentParser parser, SQLXContentSourceContext context) throws Exception {
+    public void parse(XContentParser parser, SQLRequestParseContext context) throws Exception {
         XContentParser.Token token = parser.currentToken();
 
-        if(token != XContentParser.Token.START_ARRAY) {
-            throw new SQLParseSourceException(context, "Field [" + parser.currentName() + "] has an invalid value");
+        if (token != XContentParser.Token.START_ARRAY) {
+            throw new SQLParseSourceException("Field [" + parser.currentName() + "] has an invalid value");
         }
 
-        Object[][] params = parseSubArrays(context, parser);
+        Object[][] params = parseSubArrays(parser);
         context.bulkArgs(params);
     }
 
-    private Object[][] parseSubArrays(SQLXContentSourceContext context, XContentParser parser) throws IOException {
+    private Object[][] parseSubArrays(XContentParser parser) throws IOException {
         XContentParser.Token token;
-        List<Object[]> list = new ArrayList<Object[]>();
-        while((token = parser.nextToken()) != XContentParser.Token.END_ARRAY){
-            if(token == XContentParser.Token.START_ARRAY) {
-                list.add(parseSubArray(context, parser));
+        List<Object[]> list = new ArrayList<>();
+        while ((token = parser.nextToken()) != XContentParser.Token.END_ARRAY) {
+            if (token == XContentParser.Token.START_ARRAY) {
+                list.add(parseSubArray(parser));
             } else {
-                throw new SQLParseSourceException(context, "Field [" + parser.currentName() + "] has an invalid value");
+                throw new SQLParseSourceException("Field [" + parser.currentName() + "] has an invalid value");
             }
         }
         return list.toArray(new Object[list.size()][]);

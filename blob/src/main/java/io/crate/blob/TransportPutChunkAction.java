@@ -21,40 +21,39 @@
 
 package io.crate.blob;
 
-import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.action.support.replication.TransportShardReplicationOperationAction;
-import org.elasticsearch.cluster.ClusterService;
-import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.action.support.ActionFilters;
+import org.elasticsearch.action.support.replication.TransportReplicationAction;
 import org.elasticsearch.cluster.action.shard.ShardStateAction;
-import org.elasticsearch.cluster.block.ClusterBlockException;
-import org.elasticsearch.cluster.block.ClusterBlockLevel;
+import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.routing.ShardIterator;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
-public class TransportPutChunkAction extends TransportShardReplicationOperationAction<PutChunkRequest, PutChunkReplicaRequest, PutChunkResponse> {
+public class TransportPutChunkAction extends TransportReplicationAction<PutChunkRequest, PutChunkReplicaRequest, PutChunkResponse> {
 
     private final BlobTransferTarget transferTarget;
 
     @Inject
-    public TransportPutChunkAction(Settings settings, TransportService transportService, ClusterService clusterService, IndicesService
-            indicesService, ThreadPool threadPool, ShardStateAction shardStateAction,
-            BlobTransferTarget transferTarget) {
-        super(settings, PutChunkAction.NAME, transportService, clusterService, indicesService, threadPool, shardStateAction);
+    public TransportPutChunkAction(Settings settings,
+                                   TransportService transportService,
+                                   ClusterService clusterService,
+                                   IndicesService indicesService,
+                                   ThreadPool threadPool,
+                                   ShardStateAction shardStateAction,
+                                   BlobTransferTarget transferTarget,
+                                   ActionFilters actionFilters,
+                                   IndexNameExpressionResolver indexNameExpressionResolver) {
+        super(settings, PutChunkAction.NAME, transportService, clusterService,
+            indicesService, threadPool, shardStateAction, actionFilters,
+            indexNameExpressionResolver, PutChunkRequest::new, PutChunkReplicaRequest::new, ThreadPool.Names.INDEX);
+
         this.transferTarget = transferTarget;
-    }
-
-    @Override
-    protected PutChunkRequest newRequestInstance() {
-        return new PutChunkRequest();
-    }
-
-    @Override
-    protected PutChunkReplicaRequest newReplicaRequestInstance() {
-        return new PutChunkReplicaRequest();
     }
 
     @Override
@@ -63,57 +62,39 @@ public class TransportPutChunkAction extends TransportShardReplicationOperationA
     }
 
     @Override
-    protected String executor() {
-        return ThreadPool.Names.INDEX;
+    protected void resolveRequest(IndexMetaData indexMetaData, PutChunkRequest request) {
+        ShardIterator shardIterator = clusterService.operationRouting().indexShards(
+            clusterService.state(), request.index(), null, request.digest());
+        request.setShardId(shardIterator.shardId());
+        super.resolveRequest(indexMetaData, request);
     }
 
     @Override
-    protected PrimaryResponse<PutChunkResponse, PutChunkReplicaRequest> shardOperationOnPrimary(ClusterState clusterState,
-            PrimaryOperationRequest shardRequest) {
-        final PutChunkRequest request = shardRequest.request;
+    protected PrimaryResult<PutChunkReplicaRequest, PutChunkResponse> shardOperationOnPrimary(PutChunkRequest request, IndexShard primary) {
         PutChunkResponse response = newResponseInstance();
         transferTarget.continueTransfer(request, response);
 
-        final PutChunkReplicaRequest replicaRequest = newReplicaRequestInstance();
+        final PutChunkReplicaRequest replicaRequest = new PutChunkReplicaRequest();
+        replicaRequest.setShardId(request.shardId());
         replicaRequest.transferId = request.transferId();
-        replicaRequest.sourceNodeId = clusterState.getNodes().localNode().getId();
+        replicaRequest.sourceNodeId = clusterService.localNode().getId();
         replicaRequest.currentPos = request.currentPos();
         replicaRequest.content = request.content();
         replicaRequest.isLast = request.isLast();
         replicaRequest.index(request.index());
-        return new PrimaryResponse<>(replicaRequest, response, null);
+        return new PrimaryResult<>(replicaRequest, response);
     }
 
     @Override
-    protected void shardOperationOnReplica(ReplicaOperationRequest shardRequest) {
-        final PutChunkReplicaRequest request = shardRequest.request;
+    protected ReplicaResult shardOperationOnReplica(PutChunkReplicaRequest shardRequest, IndexShard replica) {
         PutChunkResponse response = newResponseInstance();
-        transferTarget.continueTransfer(request, response, shardRequest.shardId);
+        transferTarget.continueTransfer(shardRequest, response);
+        return new ReplicaResult();
     }
 
     @Override
-    protected ShardIterator shards(ClusterState clusterState, PutChunkRequest request) throws ElasticsearchException {
-        return clusterService.operationRouting()
-            .indexShards(clusterService.state(),
-                request.index(),
-                null,
-                null,
-                request.digest());
-    }
-
-    @Override
-    protected boolean checkWriteConsistency() {
-        return true;
-    }
-
-    @Override
-    protected ClusterBlockException checkGlobalBlock(ClusterState state, PutChunkRequest request) {
-        return state.blocks().globalBlockedException(ClusterBlockLevel.WRITE);
-    }
-
-    @Override
-    protected ClusterBlockException checkRequestBlock(ClusterState state, PutChunkRequest request) {
-        return state.blocks().indexBlockedException(ClusterBlockLevel.WRITE, request.index());
+    protected boolean resolveIndex() {
+        return false;
     }
 }
 

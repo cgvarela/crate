@@ -22,57 +22,29 @@
 package io.crate.analyze;
 
 import com.google.common.base.Preconditions;
-import io.crate.core.NumberOfReplicas;
-import io.crate.metadata.TableIdent;
+import io.crate.metadata.RelationName;
 import io.crate.metadata.blob.BlobSchemaInfo;
-import io.crate.sql.tree.Expression;
-import io.crate.sql.tree.GenericProperties;
 import io.crate.sql.tree.Table;
 
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 
-public abstract class BlobTableAnalyzer<TypeAnalysis extends Analysis>
-        extends AbstractStatementAnalyzer<Void, TypeAnalysis> {
+final class BlobTableAnalyzer {
 
-    protected static TableIdent tableToIdent(Table table) {
+    private BlobTableAnalyzer() {
+    }
+
+    static RelationName tableToIdent(Table table) {
         List<String> tableNameParts = table.getName().getParts();
         Preconditions.checkArgument(tableNameParts.size() < 3, "Invalid tableName \"%s\"", table.getName());
 
         if (tableNameParts.size() == 2) {
             Preconditions.checkArgument(tableNameParts.get(0).equalsIgnoreCase(BlobSchemaInfo.NAME),
-                    "The Schema \"%s\" isn't valid in a [CREATE | ALTER] BLOB TABLE clause",
-                    tableNameParts.get(0));
+                "The Schema \"%s\" isn't valid in a [CREATE | ALTER] BLOB TABLE clause",
+                tableNameParts.get(0));
 
-            return new TableIdent(tableNameParts.get(0), tableNameParts.get(1));
+            return new RelationName(tableNameParts.get(0), tableNameParts.get(1));
         }
-        assert tableNameParts.size() == 1;
-        return new TableIdent(BlobSchemaInfo.NAME, tableNameParts.get(0));
-    }
-
-    protected static NumberOfReplicas extractNumberOfReplicas(
-            GenericProperties genericProperties,
-            Object[] parameters) {
-        Map<String,Expression> properties = genericProperties.properties();
-        Expression number_of_replicas = properties.remove("number_of_replicas");
-
-        NumberOfReplicas numberOfReplicas = null;
-        if (number_of_replicas != null) {
-            try {
-                Integer numReplicas = ExpressionToNumberVisitor.convert(number_of_replicas, parameters).intValue();
-                numberOfReplicas = new NumberOfReplicas(numReplicas);
-            } catch (IllegalArgumentException e) {
-                String numReplicas = ExpressionToObjectVisitor.convert(number_of_replicas, parameters).toString();
-                numberOfReplicas = new NumberOfReplicas(numReplicas);
-            }
-        }
-
-        if (properties.size() > 0) {
-            throw new IllegalArgumentException(
-                    String.format(Locale.ENGLISH, "Invalid properties \"%s\" passed to [ALTER | CREATE] BLOB TABLE statement",
-                            properties.keySet()));
-        }
-        return numberOfReplicas;
+        assert tableNameParts.size() == 1 : "tableNameParts.size() must be 1";
+        return new RelationName(BlobSchemaInfo.NAME, tableNameParts.get(0));
     }
 }

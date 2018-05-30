@@ -21,22 +21,16 @@
 
 package io.crate.exceptions;
 
-public class AnalyzerUnknownException extends ResourceUnknownException {
+import java.util.Locale;
 
-    private String analyzerName;
+public class AnalyzerUnknownException extends ResourceUnknownException implements ClusterScopeException {
 
     public AnalyzerUnknownException(String analyzerName) {
-        super(String.format("Analyzer '%s' unknown", analyzerName));
-        this.analyzerName = analyzerName;
+        super(String.format(Locale.ENGLISH, "Analyzer '%s' unknown", analyzerName));
     }
 
     @Override
     public int errorCode() {
         return 2;
-    }
-
-    @Override
-    public Object[] args() {
-        return new Object[]{analyzerName};
     }
 }

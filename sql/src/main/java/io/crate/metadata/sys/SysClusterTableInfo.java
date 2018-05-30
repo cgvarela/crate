@@ -22,319 +22,41 @@
 package io.crate.metadata.sys;
 
 import com.google.common.collect.ImmutableList;
+import io.crate.action.sql.SessionContext;
 import io.crate.analyze.WhereClause;
-import io.crate.metadata.*;
+import io.crate.metadata.ColumnIdent;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.Routing;
+import io.crate.metadata.RoutingProvider;
+import io.crate.metadata.RowGranularity;
 import io.crate.metadata.settings.CrateSettings;
-import io.crate.planner.RowGranularity;
-import io.crate.types.DataType;
+import io.crate.metadata.table.ColumnRegistrar;
+import io.crate.metadata.table.StaticTableInfo;
+import io.crate.expression.reference.sys.cluster.ClusterLoggingOverridesExpression;
+import io.crate.expression.reference.sys.cluster.ClusterSettingsExpression;
+import io.crate.settings.CrateSetting;
+import io.crate.types.ArrayType;
 import io.crate.types.DataTypes;
-import org.elasticsearch.cluster.ClusterService;
-import org.elasticsearch.common.collect.MapBuilder;
-import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.cluster.ClusterState;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.List;
 
-public class SysClusterTableInfo extends SysTableInfo {
+public class SysClusterTableInfo extends StaticTableInfo {
 
-    public static final TableIdent IDENT = new TableIdent(SCHEMA, "cluster");
-    public static final Routing ROUTING = new Routing(
-            MapBuilder.<String, Map<String, Set<Integer>>>newMapBuilder().put(
-                    null,
-                    MapBuilder.<String, Set<Integer>>newMapBuilder().put(IDENT.fqn(), null).map()
-            ).map()
-    );
-    private static final String[] PARTITIONS = new String[]{IDENT.name()};
+    public static final RelationName IDENT = new RelationName(SysSchemaInfo.NAME, "cluster");
 
-    public static final Map<ColumnIdent, ReferenceInfo> INFOS = new LinkedHashMap<>();
-    private static final LinkedHashSet<ReferenceInfo> columns = new LinkedHashSet<>();
-
-    static {
-        register("id", DataTypes.STRING, null);
-        register("name", DataTypes.STRING, null);
-        register("master_node", DataTypes.STRING, null);
-        register("settings", DataTypes.OBJECT, null);
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.STATS.name()));
-        register("settings", DataTypes.INTEGER, ImmutableList.of(CrateSettings.STATS.name(),
-                CrateSettings.STATS_JOBS_LOG_SIZE.name()));
-        register("settings", DataTypes.INTEGER, ImmutableList.of(CrateSettings.STATS.name(),
-                CrateSettings.STATS_OPERATIONS_LOG_SIZE.name()));
-        register("settings", DataTypes.BOOLEAN, ImmutableList.of(CrateSettings.STATS.name(),
-                CrateSettings.STATS_ENABLED.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.DISCOVERY.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.DISCOVERY.name(),
-                CrateSettings.DISCOVERY_ZEN.name()));
-        register("settings", DataTypes.INTEGER, ImmutableList.of(CrateSettings.DISCOVERY.name(),
-                CrateSettings.DISCOVERY_ZEN.name(),
-                CrateSettings.DISCOVERY_ZEN_MIN_MASTER_NODES.name()));
-        register("settings", DataTypes.LONG, ImmutableList.of(CrateSettings.DISCOVERY.name(),
-                CrateSettings.DISCOVERY_ZEN.name(),
-                CrateSettings.DISCOVERY_ZEN_PING_TIMEOUT.name()));
-        register("settings", DataTypes.LONG, ImmutableList.of(CrateSettings.DISCOVERY.name(),
-                CrateSettings.DISCOVERY_ZEN.name(),
-                CrateSettings.DISCOVERY_ZEN_PUBLISH_TIMEOUT.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.GRACEFUL_STOP.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.GRACEFUL_STOP.name(),
-                CrateSettings.GRACEFUL_STOP_MIN_AVAILABILITY.name()));
-        register("settings", DataTypes.BOOLEAN, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.GRACEFUL_STOP.name(),
-                CrateSettings.GRACEFUL_STOP_REALLOCATE.name()));
-        register("settings", DataTypes.LONG, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.GRACEFUL_STOP.name(),
-                CrateSettings.GRACEFUL_STOP_TIMEOUT.name()));
-        register("settings", DataTypes.BOOLEAN, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.GRACEFUL_STOP.name(),
-                CrateSettings.GRACEFUL_STOP_FORCE.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_ENABLE.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_ALLOW_REBALANCE.name()));
-        register("settings", DataTypes.INTEGER, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_CLUSTER_CONCURRENT_REBALANCE.name()));
-        register("settings", DataTypes.INTEGER, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_NODE_INITIAL_PRIMARIES_RECOVERIES.name()));
-        register("settings", DataTypes.INTEGER, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_NODE_CONCURRENT_RECOVERIES.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_INCLUDE.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_INCLUDE.name(),
-                CrateSettings.ROUTING_ALLOCATION_INCLUDE_IP.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_INCLUDE.name(),
-                CrateSettings.ROUTING_ALLOCATION_INCLUDE_ID.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_INCLUDE.name(),
-                CrateSettings.ROUTING_ALLOCATION_INCLUDE_HOST.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_INCLUDE.name(),
-                CrateSettings.ROUTING_ALLOCATION_INCLUDE_NAME.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_EXCLUDE.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_EXCLUDE.name(),
-                CrateSettings.ROUTING_ALLOCATION_EXCLUDE_IP.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_EXCLUDE.name(),
-                CrateSettings.ROUTING_ALLOCATION_EXCLUDE_ID.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_EXCLUDE.name(),
-                CrateSettings.ROUTING_ALLOCATION_EXCLUDE_HOST.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_EXCLUDE.name(),
-                CrateSettings.ROUTING_ALLOCATION_EXCLUDE_NAME.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_REQUIRE.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_REQUIRE.name(),
-                CrateSettings.ROUTING_ALLOCATION_REQUIRE_IP.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_REQUIRE.name(),
-                CrateSettings.ROUTING_ALLOCATION_REQUIRE_ID.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_REQUIRE.name(),
-                CrateSettings.ROUTING_ALLOCATION_REQUIRE_HOST.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_REQUIRE.name(),
-                CrateSettings.ROUTING_ALLOCATION_REQUIRE_NAME.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_BALANCE.name()));
-        register("settings", DataTypes.FLOAT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_BALANCE.name(),
-                CrateSettings.ROUTING_ALLOCATION_BALANCE_SHARD.name()));
-        register("settings", DataTypes.FLOAT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_BALANCE.name(),
-                CrateSettings.ROUTING_ALLOCATION_BALANCE_INDEX.name()));
-        register("settings", DataTypes.FLOAT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_BALANCE.name(),
-                CrateSettings.ROUTING_ALLOCATION_BALANCE_PRIMARY.name()));
-        register("settings", DataTypes.FLOAT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_BALANCE.name(),
-                CrateSettings.ROUTING_ALLOCATION_BALANCE_THRESHOLD.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK.name()));
-        register("settings", DataTypes.BOOLEAN, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK_THRESHOLD_ENABLED.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK_LOW.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.ROUTING.name(),
-                CrateSettings.ROUTING_ALLOCATION.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK.name(),
-                CrateSettings.ROUTING_ALLOCATION_DISK_WATERMARK_HIGH.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.INDICES.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_RECOVERY.name()));
-        register("settings", DataTypes.INTEGER, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_RECOVERY.name(),
-                CrateSettings.INDICES_RECOVERY_CONCURRENT_STREAMS.name()));
-        register("settings", DataTypes.LONG, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_RECOVERY.name(),
-                CrateSettings.INDICES_RECOVERY_FILE_CHUNK_SIZE.name()));
-        register("settings", DataTypes.INTEGER, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_RECOVERY.name(),
-                CrateSettings.INDICES_RECOVERY_TRANSLOG_OPS.name()));
-        register("settings", DataTypes.LONG, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_RECOVERY.name(),
-                CrateSettings.INDICES_RECOVERY_TRANSLOG_SIZE.name()));
-        register("settings", DataTypes.BOOLEAN, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_RECOVERY.name(),
-                CrateSettings.INDICES_RECOVERY_COMPRESS.name()));
-        register("settings", DataTypes.LONG, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_RECOVERY.name(),
-                CrateSettings.INDICES_RECOVERY_MAX_BYTES_PER_SEC.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_STORE.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_STORE.name(),
-                CrateSettings.INDICES_STORE_THROTTLE.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_STORE.name(),
-                CrateSettings.INDICES_STORE_THROTTLE.name(),
-                CrateSettings.INDICES_STORE_THROTTLE_TYPE.name()));
-        register("settings", DataTypes.LONG, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_STORE.name(),
-                CrateSettings.INDICES_STORE_THROTTLE.name(),
-                CrateSettings.INDICES_STORE_THROTTLE_MAX_BYTES_PER_SEC.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_FIELDDATA.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_FIELDDATA.name(),
-                CrateSettings.INDICES_FIELDDATA_BREAKER.name()));
-        register("settings", DataTypes.STRING, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_FIELDDATA.name(),
-                CrateSettings.INDICES_FIELDDATA_BREAKER.name(),
-                CrateSettings.INDICES_FIELDDATA_BREAKER_LIMIT.name()));
-        register("settings", DataTypes.DOUBLE, ImmutableList.of(CrateSettings.INDICES.name(),
-                CrateSettings.INDICES_FIELDDATA.name(),
-                CrateSettings.INDICES_FIELDDATA_BREAKER.name(),
-                CrateSettings.INDICES_FIELDDATA_BREAKER_OVERHEAD.name()));
-
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.CLUSTER_INFO.name()));
-        register("settings", DataTypes.OBJECT, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.CLUSTER_INFO.name(),
-                CrateSettings.CLUSTER_INFO_UPDATE.name()));
-        register("settings", DataTypes.LONG, ImmutableList.of(CrateSettings.CLUSTER.name(),
-                CrateSettings.CLUSTER_INFO.name(),
-                CrateSettings.CLUSTER_INFO_UPDATE.name(),
-                CrateSettings.CLUSTER_INFO_UPDATE_INTERVAL.name()));
-    }
-
-    @Inject
-    protected SysClusterTableInfo(ClusterService clusterService, SysSchemaInfo sysSchemaInfo) {
-        super(clusterService, sysSchemaInfo);
-    }
-
-    public static ReferenceInfo register(String column, DataType type, List<String> path) {
-        ReferenceInfo info = new ReferenceInfo(new ReferenceIdent(IDENT, column, path), RowGranularity.CLUSTER, type);
-        if (info.ident().isColumn()) {
-            columns.add(info);
-        }
-        INFOS.put(info.ident().columnIdent(), info);
-        return info;
+    SysClusterTableInfo() {
+        super(IDENT, buildColumnRegistrar(), Collections.emptyList());
     }
 
     @Override
-    public ReferenceInfo getReferenceInfo(ColumnIdent columnIdent) {
-        return INFOS.get(columnIdent);
-    }
-
-    @Override
-    public Collection<ReferenceInfo> columns() {
-        return columns;
-    }
-
-    @Override
-    public Routing getRouting(WhereClause whereClause) {
-        return ROUTING;
-    }
-
-    @Override
-    public List<ColumnIdent> primaryKey() {
-        return ImmutableList.of();
+    public Routing getRouting(ClusterState clusterState,
+                              RoutingProvider routingProvider,
+                              WhereClause whereClause,
+                              RoutingProvider.ShardSelection shardSelection,
+                              SessionContext sessionContext) {
+        return Routing.forTableOnSingleNode(IDENT, clusterState.getNodes().getLocalNodeId());
     }
 
     @Override
@@ -342,18 +64,43 @@ public class SysClusterTableInfo extends SysTableInfo {
         return RowGranularity.CLUSTER;
     }
 
-    @Override
-    public TableIdent ident() {
-        return IDENT;
+    private static ColumnRegistrar buildColumnRegistrar() {
+        ColumnRegistrar columnRegistrar = new ColumnRegistrar(IDENT, RowGranularity.CLUSTER)
+            .register("id", DataTypes.STRING, null)
+            .register("name", DataTypes.STRING, null)
+            .register("master_node", DataTypes.STRING, null)
+            .register(ClusterSettingsExpression.NAME, DataTypes.OBJECT, null)
+            // custom registration of logger expressions
+            .register(ClusterSettingsExpression.NAME, new ArrayType(DataTypes.OBJECT), ImmutableList.of(
+                ClusterLoggingOverridesExpression.NAME))
+            .register(ClusterSettingsExpression.NAME, DataTypes.STRING, ImmutableList.of(
+                ClusterLoggingOverridesExpression.NAME,
+                ClusterLoggingOverridesExpression.ClusterLoggingOverridesChildExpression.NAME))
+            .register(ClusterSettingsExpression.NAME, DataTypes.STRING, ImmutableList.of(
+                ClusterLoggingOverridesExpression.NAME,
+                ClusterLoggingOverridesExpression.ClusterLoggingOverridesChildExpression.LEVEL));
+
+        // register all exposed crate and elasticsearch settings
+        for (CrateSetting<?> crateSetting : CrateSettings.BUILT_IN_SETTINGS) {
+            List<String> namePath = crateSetting.path();
+            createParentColumnIfMissing(columnRegistrar, namePath);
+            // don't register empty groups
+            if (namePath.get(namePath.size() - 1).isEmpty() == false) {
+                columnRegistrar.register(ClusterSettingsExpression.NAME, crateSetting.dataType(), namePath);
+            }
+        }
+
+        return columnRegistrar;
     }
 
-    @Override
-    public String[] concreteIndices() {
-        return PARTITIONS;
+    private static void createParentColumnIfMissing(ColumnRegistrar columnRegistrar, List<String> nameParts) {
+        for (int i = 1; i < nameParts.size(); i++) {
+            ColumnIdent columnIdent = new ColumnIdent(ClusterSettingsExpression.NAME, nameParts.subList(0, i));
+            if (columnRegistrar.infos().get(columnIdent) == null) {
+                columnRegistrar.register(columnIdent, DataTypes.OBJECT);
+            }
+        }
     }
 
-    @Override
-    public Iterator<ReferenceInfo> iterator() {
-        return INFOS.values().iterator();
-    }
+
 }

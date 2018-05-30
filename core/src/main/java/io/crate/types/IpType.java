@@ -22,13 +22,14 @@
 package io.crate.types;
 
 import org.apache.lucene.util.BytesRef;
-import org.elasticsearch.index.mapper.ip.IpFieldMapper;
+import org.elasticsearch.common.network.InetAddresses;
+
+import java.util.Locale;
 
 public class IpType extends StringType {
 
-    public final static int ID = 5;
-    public final static IpType INSTANCE = new IpType();
-    protected IpType() {}
+    public static final int ID = 5;
+    public static final IpType INSTANCE = new IpType();
 
     @Override
     public int id() {
@@ -37,17 +38,41 @@ public class IpType extends StringType {
 
     @Override
     public BytesRef value(Object value) {
-        String strIp;
+        if (value == null) {
+            return null;
+        }
         if (value instanceof BytesRef) {
-            return (BytesRef)value;
+            BytesRef ip = (BytesRef) value;
+            validate(ip.utf8ToString());
+            return ip;
         }
         if (value instanceof String) {
-            strIp = (String) value;
+            validate((String) value);
+            return new BytesRef((String) value);
         } else {
-            Long longIp = ((Number)value).longValue();
-            strIp = IpFieldMapper.longToIp(longIp);
+            Long longIp = ((Number) value).longValue();
+            if (longIp < 0) {
+                throw new IllegalArgumentException(String.format(Locale.ENGLISH, "Failed to convert long value: %s to ipv4 address)",
+                    longIp));
+            }
+            String strIp = longToIp(longIp);
+            return new BytesRef(strIp);
         }
-        return new BytesRef(strIp);
+    }
+
+    private static String longToIp(long longIp) {
+        int octet3 = (int) ((longIp >> 24) % 256);
+        int octet2 = (int) ((longIp >> 16) % 256);
+        int octet1 = (int) ((longIp >> 8) % 256);
+        int octet0 = (int) ((longIp) % 256);
+        return octet3 + "." + octet2 + "." + octet1 + "." + octet0;
+    }
+
+    private void validate(String ip) {
+        if (!InetAddresses.isInetAddress(ip)) {
+            throw new IllegalArgumentException(
+                "Failed to validate ip [" + ip + "], not a valid ipv4 address");
+        }
     }
 
     @Override
@@ -55,8 +80,4 @@ public class IpType extends StringType {
         return "ip";
     }
 
-    @Override
-    public DataType<?> create() {
-        return IpType.INSTANCE;
-    }
 }

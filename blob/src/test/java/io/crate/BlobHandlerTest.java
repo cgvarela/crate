@@ -22,37 +22,37 @@
 package io.crate;
 
 import com.google.common.collect.ImmutableList;
-import io.crate.http.netty.HttpBlobHandler;
+import io.crate.protocols.http.HttpBlobHandler;
+import io.crate.test.integration.CrateUnitTest;
 import org.junit.Test;
 
 import java.util.List;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.is;
 
-public class BlobHandlerTest {
+public class BlobHandlerTest extends CrateUnitTest {
 
     private static List<String> validUrls = ImmutableList.<String>builder()
-            .add("/_blobs/b/f3b4df9c032a14ad415455354798fa2fc3bf1df7")
-            .add("/_blobs/bb/ab08643dd7fc5a3c0d8ebbd032a0b3605dd295a6")
-            .add("/_blobs/looooooooooooooooong_blob_table_name/b2b72f87aa85ba8ca8a71c28c8d27f8a4541b55f")
-            .build();
+        .add("/_blobs/b/f3b4df9c032a14ad415455354798fa2fc3bf1df7")
+        .add("/_blobs/bb/ab08643dd7fc5a3c0d8ebbd032a0b3605dd295a6")
+        .add("/_blobs/looooooooooooooooong_blob_table_name/b2b72f87aa85ba8ca8a71c28c8d27f8a4541b55f")
+        .build();
     private static List<String> invalidUrls = ImmutableList.<String>builder()
-            .add("_blobs/b/f3b4df9c032a14ad415455354798fa2fc3bf1df7")
-            .add("/_blobs/b/f3b4df9c032a14ad415455354798fa2fc3bf1df7/")
-            .add("/_blobs/b/f3b4df9c032a14ad415455354798fa2fc3bf1df")
-            .add("/_blobs/f3b4df9c032a14ad415455354798fa2fc3bf1df7")
-            .add("/_blobs//f3b4df9c032a14ad415455354798fa2fc3bf1df7")
-            .add("/blobs/bb/ab08643dd7fc5a3c0d8ebbd032a0b3605dd295a6")
-            .build();
+        .add("_blobs/b/f3b4df9c032a14ad415455354798fa2fc3bf1df7")
+        .add("/_blobs/b/f3b4df9c032a14ad415455354798fa2fc3bf1df7/")
+        .add("/_blobs/b/f3b4df9c032a14ad415455354798fa2fc3bf1df")
+        .add("/_blobs/f3b4df9c032a14ad415455354798fa2fc3bf1df7")
+        .add("/_blobs//f3b4df9c032a14ad415455354798fa2fc3bf1df7")
+        .add("/blobs/bb/ab08643dd7fc5a3c0d8ebbd032a0b3605dd295a6")
+        .build();
 
     @Test
     public void testBlobHandlerRegex() throws Exception {
         for (String validUrl : validUrls) {
-            assertThat(validUrl, HttpBlobHandler.pattern.matcher(validUrl).matches(), is(true));
+            assertThat(validUrl, HttpBlobHandler.BLOBS_PATTERN.matcher(validUrl).matches(), is(true));
         }
         for (String invalidUrl : invalidUrls) {
-            assertThat(invalidUrl, HttpBlobHandler.pattern.matcher(invalidUrl).matches(), is(false));
+            assertThat(invalidUrl, HttpBlobHandler.BLOBS_PATTERN.matcher(invalidUrl).matches(), is(false));
         }
     }
 }

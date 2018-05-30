@@ -22,31 +22,28 @@
 package io.crate.integrationtests;
 
 import io.crate.action.sql.SQLActionException;
-import io.crate.test.integration.CrateIntegrationTest;
-import org.junit.Rule;
+import org.elasticsearch.action.admin.indices.template.get.GetIndexTemplatesResponse;
+import org.elasticsearch.cluster.metadata.AliasMetaData;
+import org.elasticsearch.cluster.metadata.IndexTemplateMetaData;
+import org.elasticsearch.test.ESIntegTestCase;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
-@CrateIntegrationTest.ClusterScope(scope = CrateIntegrationTest.Scope.GLOBAL)
+import java.util.Locale;
+
+import static org.hamcrest.core.Is.is;
+
+@ESIntegTestCase.ClusterScope(numDataNodes = 1, numClientNodes = 0)
 public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
 
-    static {
-        ClassLoader.getSystemClassLoader().setDefaultAssertionStatus(true);
-    }
-
-    @Rule
-    public ExpectedException expectedException = ExpectedException.none();
-
     private String tableAliasSetup() throws Exception {
-        String tableName = "mytable";
-        String tableAlias = "mytablealias";
-        execute(String.format("create table %s (id integer primary key, " +
-                        "content string)",
-                tableName
+        String tableName = getFqn("mytable");
+        String tableAlias = getFqn("mytablealias");
+        execute(String.format(Locale.ENGLISH, "create table %s (id integer primary key, " +
+                                              "content string)",
+            tableName
         ));
-        ensureGreen();
-        client().admin().indices().prepareAliases().addAlias(tableName,
-                tableAlias).execute().actionGet();
+        ensureYellow();
+        client().admin().indices().prepareAliases().addAlias(tableName, tableAlias).execute().actionGet();
         refresh();
         Thread.sleep(20);
         return tableAlias;
@@ -56,9 +53,9 @@ public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
     public void testSelectTableAlias() throws Exception {
         execute("create table quotes_en (id int primary key, quote string) with (number_of_replicas=0)");
         execute("create table quotes_de (id int primary key, quote string) with (number_of_replicas=0)");
-        client().admin().indices().prepareAliases().addAlias("quotes_en", "quotes")
-                .addAlias("quotes_de", "quotes").execute().actionGet();
-        ensureGreen();
+        client().admin().indices().prepareAliases().addAlias(getFqn("quotes_en"), getFqn("quotes"))
+            .addAlias(getFqn("quotes_de"), getFqn("quotes")).execute().actionGet();
+        ensureYellow();
 
         execute("insert into quotes_en values (?,?)", new Object[]{1, "Don't panic"});
         assertEquals(1, response.rowCount());
@@ -76,12 +73,12 @@ public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
     public void testSelectTableAliasSchemaExceptionColumnDefinition() throws Exception {
         execute("create table quotes_en (id int primary key, quote string, author string)");
         execute("create table quotes_de (id int primary key, quote2 string)");
-        client().admin().indices().prepareAliases().addAlias("quotes_en", "quotes")
-                .addAlias("quotes_de", "quotes").execute().actionGet();
-        ensureGreen();
+        client().admin().indices().prepareAliases().addAlias(getFqn("quotes_en"), getFqn("quotes"))
+            .addAlias(getFqn("quotes_de"), getFqn("quotes")).execute().actionGet();
+        ensureYellow();
 
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("Table alias contains tables with different schema");
+        expectedException.expectMessage("Table alias \"quotes\" contains tables with different schema");
         execute("select quote from quotes where id = ?", new Object[]{1});
     }
 
@@ -89,12 +86,12 @@ public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
     public void testSelectTableAliasSchemaExceptionColumnDataType() throws Exception {
         execute("create table quotes_en (id int primary key, quote int) with (number_of_replicas=0)");
         execute("create table quotes_de (id int primary key, quote string) with (number_of_replicas=0)");
-        client().admin().indices().prepareAliases().addAlias("quotes_en", "quotes")
-                .addAlias("quotes_de", "quotes").execute().actionGet();
-        ensureGreen();
+        client().admin().indices().prepareAliases().addAlias(getFqn("quotes_en"), getFqn("quotes"))
+            .addAlias(getFqn("quotes_de"), getFqn("quotes")).execute().actionGet();
+        ensureYellow();
 
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("Table alias contains tables with different schema");
+        expectedException.expectMessage("Table alias \"quotes\" contains tables with different schema");
         execute("select quote from quotes where id = ?", new Object[]{1});
     }
 
@@ -102,12 +99,12 @@ public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
     public void testSelectTableAliasSchemaExceptionPrimaryKeyRoutingColumn() throws Exception {
         execute("create table quotes_en (id int primary key, quote string)");
         execute("create table quotes_de (id int, quote string)");
-        client().admin().indices().prepareAliases().addAlias("quotes_en", "quotes")
-                .addAlias("quotes_de", "quotes").execute().actionGet();
-        ensureGreen();
+        client().admin().indices().prepareAliases().addAlias(getFqn("quotes_en"), getFqn("quotes"))
+            .addAlias(getFqn("quotes_de"), getFqn("quotes")).execute().actionGet();
+        ensureYellow();
 
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("Table alias contains tables with different schema");
+        expectedException.expectMessage("Table alias \"quotes\" contains tables with different schema");
         execute("select quote from quotes where id = ?", new Object[]{1});
     }
 
@@ -115,19 +112,19 @@ public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
     public void testSelectTableAliasSchemaExceptionIndices() throws Exception {
         execute("create table quotes_en (id int primary key, quote string)");
         execute("create table quotes_de (id int primary key, quote2 string index using fulltext)");
-        client().admin().indices().prepareAliases().addAlias("quotes_en", "quotes")
-                .addAlias("quotes_de", "quotes").execute().actionGet();
-        ensureGreen();
+        client().admin().indices().prepareAliases().addAlias(getFqn("quotes_en"), getFqn("quotes"))
+            .addAlias(getFqn("quotes_de"), getFqn("quotes")).execute().actionGet();
+        ensureYellow();
 
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("Table alias contains tables with different schema");
+        expectedException.expectMessage("Table alias \"quotes\" contains tables with different schema");
         execute("select quote from quotes where id = ?", new Object[]{1});
     }
 
     @Test
     public void testCountWithGroupByTableAlias() throws Exception {
         execute("create table characters_guide (race string, gender string, name string)");
-        ensureGreen();
+        ensureYellow();
         execute("insert into characters_guide (race, gender, name) values ('Human', 'male', 'Arthur Dent')");
         execute("insert into characters_guide (race, gender, name) values ('Android', 'male', 'Marving')");
         execute("insert into characters_guide (race, gender, name) values ('Vogon', 'male', 'Jeltz')");
@@ -135,15 +132,15 @@ public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
         refresh();
 
         execute("create table characters_life (race string, gender string, name string)");
-        ensureGreen();
+        ensureYellow();
         execute("insert into characters_life (race, gender, name) values ('Rabbit', 'male', 'Agrajag')");
         execute("insert into characters_life (race, gender, name) values ('Human', 'male', 'Ford Perfect')");
         execute("insert into characters_life (race, gender, name) values ('Human', 'female', 'Trillian')");
         refresh();
 
-        client().admin().indices().prepareAliases().addAlias("characters_guide", "characters")
-                .addAlias("characters_life", "characters").execute().actionGet();
-        ensureGreen();
+        client().admin().indices().prepareAliases().addAlias(getFqn("characters_guide"), getFqn("characters"))
+            .addAlias(getFqn("characters_life"), getFqn("characters")).execute().actionGet();
+        ensureYellow();
 
         execute("select count(*) from characters");
         assertEquals(7L, response.rows()[0][0]);
@@ -160,26 +157,28 @@ public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
         String tableAlias = tableAliasSetup();
 
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("The table 'mytablealias' already exists.");
+        expectedException.expectMessage(String.format(Locale.ENGLISH, "Relation '%s.mytablealias' already exists.", sqlExecutor.getDefaultSchema()));
 
-        execute(String.format("create table %s (content string index off)", tableAlias));
+        execute(String.format(Locale.ENGLISH, "create table %s (content string index off)", tableAlias));
     }
 
     @Test
     public void testDropTableWithTableAlias() throws Exception {
         String tableAlias = tableAliasSetup();
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("Table alias not allowed in DROP TABLE statement.");
-        execute(String.format("drop table %s", tableAlias));
+        expectedException.expectMessage(String.format(Locale.ENGLISH, "The relation \"%s.mytablealias\" doesn't support or allow DROP " +
+                                        "operations, as it is read-only.", sqlExecutor.getDefaultSchema()));
+        execute(String.format(Locale.ENGLISH, "drop table %s", tableAlias));
     }
 
     @Test
     public void testCopyFromWithTableAlias() throws Exception {
         String tableAlias = tableAliasSetup();
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("aliases are read only");
+        expectedException.expectMessage(String.format(Locale.ENGLISH, "The relation \"%s.mytablealias\" doesn't support or allow INSERT " +
+                                        "operations, as it is read-only.", sqlExecutor.getDefaultSchema()));
 
-        execute(String.format("copy %s from '/tmp/file.json'", tableAlias));
+        execute(String.format(Locale.ENGLISH, "copy %s from '/tmp/file.json'", tableAlias));
 
     }
 
@@ -187,11 +186,11 @@ public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
     public void testInsertWithTableAlias() throws Exception {
         String tableAlias = tableAliasSetup();
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("aliases are read only");
-
+        expectedException.expectMessage(String.format(Locale.ENGLISH, "The relation \"%s.mytablealias\" doesn't support or allow INSERT " +
+                                        "operations, as it is read-only.", sqlExecutor.getDefaultSchema()));
         execute(
-                String.format("insert into %s (id, content) values (?, ?)", tableAlias),
-                new Object[]{1, "bla"}
+            String.format(Locale.ENGLISH, "insert into %s (id, content) values (?, ?)", tableAlias),
+            new Object[]{1, "bla"}
         );
     }
 
@@ -199,24 +198,49 @@ public class TableAliasIntegrationTest extends SQLTransportIntegrationTest {
     public void testUpdateWithTableAlias() throws Exception {
         String tableAlias = tableAliasSetup();
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("aliases are read only");
+        expectedException.expectMessage(String.format(Locale.ENGLISH, "The relation \"%s.mytablealias\" doesn't support or allow UPDATE " +
+                                        "operations, as it is read-only.", sqlExecutor.getDefaultSchema()));
 
-        execute(
-                String.format("update %s set id=?, content=?", tableAlias),
-                new Object[]{1, "bla"}
-        );
+        execute(String.format(Locale.ENGLISH, "update %s set id=?, content=?", tableAlias), new Object[]{1, "bla"});
     }
 
     @Test
     public void testDeleteWithTableAlias() throws Exception {
         String tableAlias = tableAliasSetup();
         expectedException.expect(SQLActionException.class);
-        expectedException.expectMessage("aliases are read only");
+        expectedException.expectMessage(String.format("The relation \"%s.mytablealias\" doesn't support or allow DELETE " +
+                                        "operations, as it is read-only.", sqlExecutor.getDefaultSchema()));
 
-        execute(
-                String.format("delete from %s where id=?", tableAlias),
-                new Object[]{1}
-        );
+        execute(String.format(Locale.ENGLISH, "delete from %s where id=?", tableAlias), new Object[]{1});
+    }
+
+
+    @Test
+    public void testPartitionedTableKeepsAliasAfterSchemaUpdate() throws Exception {
+        execute("create table t (name string, p string) partitioned by (p) " +
+                "clustered into 2 shards with (number_of_replicas = 0)");
+        ensureYellow();
+
+        execute("insert into t (name, p) values ('Arthur', 'a')");
+        execute("insert into t (name, p) values ('Trillian', 'a')");
+        execute("alter table t add column age integer");
+        execute("insert into t (name, p) values ('Marvin', 'b')");
+        waitNoPendingTasksOnAll();
+        refresh();
+
+        execute("select count(*) from t");
+        assertThat(response.rowCount(), is(1L));
+        assertThat((Long) response.rows()[0][0], is(3L));
+
+        GetIndexTemplatesResponse indexTemplatesResponse =
+            client().admin().indices().prepareGetTemplates(String.format(Locale.ENGLISH, "%s..partitioned.t.", sqlExecutor.getDefaultSchema()))
+                .execute().actionGet();
+        IndexTemplateMetaData indexTemplateMetaData = indexTemplatesResponse.getIndexTemplates().get(0);
+        AliasMetaData t = indexTemplateMetaData.aliases().get(getFqn("t"));
+        assertThat(t.alias(), is(getFqn("t")));
+
+        execute("select partitioned_by from information_schema.tables where table_name = 't'");
+        assertThat((String) ((Object[]) response.rows()[0][0])[0], is("p"));
     }
 
 }

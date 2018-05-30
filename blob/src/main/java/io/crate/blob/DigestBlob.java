@@ -21,23 +21,35 @@
 
 package io.crate.blob;
 
+import com.google.common.io.ByteStreams;
+import io.crate.blob.exceptions.BlobAlreadyExistsException;
 import io.crate.blob.exceptions.DigestMismatchException;
 import io.crate.common.Hex;
+import io.netty.buffer.ByteBuf;
+import org.apache.logging.log4j.Logger;
+import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
+import org.elasticsearch.transport.netty4.Netty4Utils;
 
-import java.io.*;
+import java.io.Closeable;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class DigestBlob {
+public class DigestBlob implements Closeable {
 
     private final String digest;
     private final BlobContainer container;
@@ -51,7 +63,7 @@ public class DigestBlob {
     private MessageDigest md;
     private long chunks;
     private CountDownLatch headCatchedUpLatch;
-    private static final ESLogger logger = Loggers.getLogger(DigestBlob.class);
+    private static final Logger logger = Loggers.getLogger(DigestBlob.class);
 
     public DigestBlob(BlobContainer container, String digest, UUID transferId) {
         this.digest = digest;
@@ -72,19 +84,18 @@ public class DigestBlob {
         return file;
     }
 
-    private static File getTmpFilePath(BlobContainer blobContainer, String digest, UUID transferId) {
-       return new File(blobContainer.getTmpDirectory(), String.format("%s.%s", digest, transferId.toString()));
+    private static Path getTmpFilePath(BlobContainer blobContainer, String digest, UUID transferId) {
+        return blobContainer.getTmpDirectory().resolve(digest + "." + transferId.toString());
     }
 
     private File createTmpFile() throws IOException {
-        File tmpFile = getTmpFilePath(container, digest, transferId);
+        File tmpFile = getTmpFilePath(container, digest, transferId).toFile();
         tmpFile.createNewFile();
-        tmpFile.deleteOnExit();
         return tmpFile;
     }
 
     private void updateDigest(ByteBuffer bbf) throws IOException {
-        if (md == null){
+        if (md == null) {
             try {
                 md = MessageDigest.getInstance("SHA-1");
             } catch (NoSuchAlgorithmException e) {
@@ -94,10 +105,10 @@ public class DigestBlob {
         md.update(bbf.slice());
     }
 
-    private void addContent(ChannelBuffer buffer, boolean last) throws IOException {
+    private void addContent(ByteBuf buffer, boolean last) throws IOException {
         if (buffer != null) {
             int readableBytes = buffer.readableBytes();
-            ByteBuffer byteBuffer = buffer.toByteBuffer();
+            ByteBuffer byteBuffer = buffer.nioBuffer();
             if (file == null) {
                 file = createTmpFile();
             }
@@ -115,7 +126,7 @@ public class DigestBlob {
             } while (written < readableBytes);
             size += readableBytes;
             buffer.readerIndex(buffer.readerIndex() + written);
-            chunks ++;
+            chunks++;
         }
         if (last) {
             if (file == null) {
@@ -137,39 +148,64 @@ public class DigestBlob {
 
     private void calculateDigest() {
         assert headSize.get() == headLength : "Head hasn't catched up, can't calculate digest";
-        try {
-            FileInputStream stream = new FileInputStream(file);
-            stream.skip(headLength);
+        try (FileInputStream stream = new FileInputStream(file)) {
+            ByteStreams.skipFully(stream, headLength);
             byte[] buffer = new byte[4096];
             int bytesRead;
             while ((bytesRead = stream.read(buffer, 0, 4096)) > 0) {
                 md.update(buffer, 0, bytesRead);
             }
-            stream.close();
         } catch (IOException ex) {
             logger.error("error accessing file to calculate digest", ex);
         }
     }
 
-    public File commit() throws DigestMismatchException {
+    public File commit() throws DigestMismatchException, BlobAlreadyExistsException {
         if (headLength > 0) {
             calculateDigest();
         }
 
-        assert md != null;
-        String contentDigest = Hex.encodeHexString(md.digest());
-        if (!contentDigest.equals(digest)) {
-            file.delete();
-            throw new DigestMismatchException(digest, contentDigest);
+        assert md != null : "MessageDigest should not be null";
+        try {
+            String contentDigest = Hex.encodeHexString(md.digest());
+            if (!contentDigest.equals(digest)) {
+                file.delete();
+                throw new DigestMismatchException(digest, contentDigest);
+            }
+        } finally {
+            IOUtils.closeWhileHandlingException(headFileChannel);
+            headFileChannel = null;
         }
         File newFile = container.getFile(digest);
-        file.renameTo(newFile);
+        Semaphore semaphore = container.digestCoordinator(digest);
+        try {
+            semaphore.acquire();
+
+            try {
+                if (Files.exists(newFile.toPath())) {
+                    throw new BlobAlreadyExistsException(digest);
+                }
+                file.renameTo(newFile);
+                file = null;
+            } finally {
+                // semaphore was acquired successfully, release it
+                semaphore.release();
+            }
+        } catch (InterruptedException e) {
+            logger.error("Unable to commit blob {}", e, file.getName());
+            throw new IllegalStateException("Unable to commit blob because exclusive execution could not be achieved");
+        }
+
         return newFile;
     }
 
-    public void addContent(BytesReference content, boolean last){
+    public File getContainerFile() {
+        return container.getFile(digest);
+    }
+
+    public void addContent(BytesReference content, boolean last) {
         try {
-            addContent(content.toChannelBuffer(), last);
+            addContent(Netty4Utils.toByteBuf(content), last);
         } catch (IOException e) {
             throw new BlobWriteException(digest, size, e);
         }
@@ -181,11 +217,11 @@ public class DigestBlob {
         }
 
         int written = 0;
-        ChannelBuffer channelBuffer = content.toChannelBuffer();
-        int readableBytes = channelBuffer.readableBytes();
+        ByteBuf byteBuf = Netty4Utils.toByteBuf(content);
+        int readableBytes = byteBuf.readableBytes();
         assert readableBytes + headSize.get() <= headLength : "Got too many bytes in addToHead()";
 
-        ByteBuffer byteBuffer = channelBuffer.toByteBuffer();
+        ByteBuffer byteBuffer = byteBuf.nioBuffer();
         while (written < readableBytes) {
             updateDigest(byteBuffer);
             written += headFileChannel.write(byteBuffer);
@@ -200,19 +236,13 @@ public class DigestBlob {
         return chunks;
     }
 
-    public BlobContainer container() {
-        return this.container;
-    }
-
     public static DigestBlob resumeTransfer(BlobContainer blobContainer, String digest,
-                                            UUID transferId, long currentPos)
-    {
+                                            UUID transferId, long currentPos) {
         DigestBlob digestBlob = new DigestBlob(blobContainer, digest, transferId);
-        digestBlob.file = getTmpFilePath(blobContainer, digest, transferId);
+        digestBlob.file = getTmpFilePath(blobContainer, digest, transferId).toFile();
 
         try {
             logger.trace("Resuming DigestBlob {}. CurrentPos {}", digest, currentPos);
-
             digestBlob.headFileChannel = new FileOutputStream(digestBlob.file, false).getChannel();
             digestBlob.headLength = currentPos;
             digestBlob.headSize = new AtomicLong();
@@ -237,11 +267,18 @@ public class DigestBlob {
             return;
         }
 
-        assert headCatchedUpLatch != null;
+        assert headCatchedUpLatch != null : "headCatchedUpLatch should not be null";
         try {
             headCatchedUpLatch.await();
         } catch (InterruptedException e) {
             Thread.interrupted();
+        }
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (file != null) {
+            file.delete();
         }
     }
 }

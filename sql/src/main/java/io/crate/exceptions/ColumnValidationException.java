@@ -21,20 +21,23 @@
 
 package io.crate.exceptions;
 
+import io.crate.metadata.RelationName;
+
+import java.util.Collections;
 import java.util.Locale;
 
-public class ColumnValidationException extends ValidationException {
+public class ColumnValidationException extends ValidationException implements TableScopeException {
 
-    private final String column;
+    private final RelationName relationName;
 
-    public ColumnValidationException(String column, String message) {
+    public ColumnValidationException(String column, RelationName relationName, String message) {
         super(String.format(Locale.ENGLISH, "Validation failed for %s: %s", column, message));
-        this.column = column;
+        this.relationName = relationName;
     }
 
-    public ColumnValidationException(String column, Throwable e) {
+    public ColumnValidationException(String column, RelationName relationName, Throwable e) {
         super(String.format(Locale.ENGLISH, "Validation failed for %s: %s", column, e.getMessage()));
-        this.column = column;
+        this.relationName = relationName;
     }
 
     @Override
@@ -43,7 +46,7 @@ public class ColumnValidationException extends ValidationException {
     }
 
     @Override
-    public Object[] args() {
-        return new Object[]{column};
+    public Iterable<RelationName> getTableIdents() {
+        return Collections.singletonList(relationName);
     }
 }

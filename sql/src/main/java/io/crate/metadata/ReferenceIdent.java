@@ -22,54 +22,50 @@
 package io.crate.metadata;
 
 import com.google.common.base.Objects;
-import com.google.common.collect.ComparisonChain;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.io.stream.Streamable;
 
 import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 
-public class ReferenceIdent implements Comparable<ReferenceIdent>, Streamable {
+public class ReferenceIdent {
 
-    private TableIdent tableIdent;
-    private ColumnIdent columnIdent;
+    private final RelationName relationName;
+    private final ColumnIdent columnIdent;
 
-    public ReferenceIdent() {
-
+    public ReferenceIdent(StreamInput in) throws IOException {
+        columnIdent = new ColumnIdent(in);
+        relationName = new RelationName(in);
     }
 
-    public ReferenceIdent(TableIdent tableIdent, ColumnIdent columnIdent) {
-        this.tableIdent = tableIdent;
+    public ReferenceIdent(RelationName relationName, ColumnIdent columnIdent) {
+        this.relationName = relationName;
         this.columnIdent = columnIdent;
     }
 
-    public ReferenceIdent(TableIdent tableIdent, String column) {
-        this(tableIdent, new ColumnIdent(column));
+    public ReferenceIdent(RelationName relationName, String column) {
+        this(relationName, new ColumnIdent(column));
     }
 
-    public ReferenceIdent(TableIdent tableIdent, String column, @Nullable List<String> path) {
-        this(tableIdent, new ColumnIdent(column, path));
+    public ReferenceIdent(RelationName relationName, String column, @Nullable List<String> path) {
+        this(relationName, new ColumnIdent(column, path));
     }
 
-    public TableIdent tableIdent() {
-        return tableIdent;
+    public RelationName tableIdent() {
+        return relationName;
     }
 
-    public boolean isColumn() {
-        return columnIdent.isColumn();
-    }
-
-    public ColumnIdent columnIdent(){
+    public ColumnIdent columnIdent() {
         return columnIdent;
     }
 
     public ReferenceIdent columnReferenceIdent() {
-        if (isColumn()) {
+        if (columnIdent.isTopLevel()) {
             return this;
         }
-        return new ReferenceIdent(tableIdent, columnIdent.name());
+        return new ReferenceIdent(relationName, columnIdent.name());
     }
 
     @Override
@@ -82,44 +78,23 @@ public class ReferenceIdent implements Comparable<ReferenceIdent>, Streamable {
         }
         ReferenceIdent o = (ReferenceIdent) obj;
         return Objects.equal(columnIdent, o.columnIdent) &&
-                Objects.equal(tableIdent, o.tableIdent);
+               Objects.equal(relationName, o.relationName);
     }
 
     @Override
     public int hashCode() {
-        int result = tableIdent.hashCode();
+        int result = relationName.hashCode();
         result = 31 * result + columnIdent.hashCode();
         return result;
     }
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("table", tableIdent)
-                .add("columnIdent", columnIdent)
-                .toString();
+        return String.format(Locale.ENGLISH, "<RefIdent: %s->%s>", relationName, columnIdent);
     }
 
-    @Override
-    public int compareTo(ReferenceIdent o) {
-        return ComparisonChain.start()
-                .compare(tableIdent, o.tableIdent)
-                .compare(columnIdent, o.columnIdent)
-                .result();
-    }
-
-
-    @Override
-    public void readFrom(StreamInput in) throws IOException {
-        columnIdent = new ColumnIdent();
-        columnIdent.readFrom(in);
-        tableIdent = new TableIdent();
-        tableIdent.readFrom(in);
-    }
-
-    @Override
     public void writeTo(StreamOutput out) throws IOException {
         columnIdent.writeTo(out);
-        tableIdent.writeTo(out);
+        relationName.writeTo(out);
     }
 }

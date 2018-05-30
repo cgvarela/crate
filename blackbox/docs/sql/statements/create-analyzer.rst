@@ -1,0 +1,80 @@
+.. highlight:: psql
+.. _ref-create-analyzer:
+
+===================
+``CREATE ANALYZER``
+===================
+
+Define a new fulltext analyzer.
+
+.. rubric:: Table of Contents
+
+.. contents::
+   :local:
+
+Synopsis
+========
+
+::
+
+    CREATE ANALYZER analyzer_name EXTENDS parent_analyzer_name
+        WITH ( override_parameter [= value] [, ... ] )
+
+::
+
+    CREATE ANALYZER analyzer_name (
+        [ TOKENIZER tokenizer_name
+           [ WITH ( tokenizer_parameter [= value] [, ... ] ) ]
+        ]
+        [ TOKEN_FILTERS (
+            { token_filter_name
+              [ WITH ( token_filter_parameter [= value] [, ... ] ) ] }
+            [, ... ]
+          )
+        ]
+        [ CHAR_FILTERS (
+            { char_filter_name
+              [ WITH ( char_filter_parameter [= value] [, ... ] ) ] }
+            [, ... ]
+          )
+        ]
+    )
+
+Description
+===========
+
+CREATE ANALYZER speifies a whole analyzer chain for use in fulltext searches.
+It is possible to extend an existing analyzer or define a new analyzer chain
+from scratch. For examples and detailed explanation see
+:ref:`create_custom_analyzer`.
+
+Parameters
+==========
+
+:analyzer_name:
+  The globally unique name of the analzyer being created.
+
+:parent_analyzer_name:
+  The name of the analyzer to inherit defaults from.
+
+:override_parameter:
+  The name of a parameter of the parent analyzer which should be
+  assigned a new value to.
+
+:tokenizer_name:
+  The name of a builtin tokenizer to be used.
+
+:tokenizer_parameter:
+  A name of a parameter for a given tokenizer.
+
+:token_filter_name:
+  The name of a builtin token filter to be used.
+
+:token_filter_parameter:
+  A name of a parameter for a given token filter.
+
+:char_filter_name:
+  The name of a builtin char filter to be used.
+
+:char_filter_parameter:
+  A name of a parameter for a given char filter.

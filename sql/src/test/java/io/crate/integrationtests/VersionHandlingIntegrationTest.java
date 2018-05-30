@@ -21,46 +21,37 @@
 
 package io.crate.integrationtests;
 
-import io.crate.test.integration.CrateIntegrationTest;
-import org.junit.Rule;
+import io.crate.action.sql.SQLActionException;
+import io.crate.exceptions.VersionInvalidException;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
 import java.io.IOException;
 
+import static io.crate.testing.TestingHelpers.printedTable;
 import static org.hamcrest.Matchers.arrayContainingInAnyOrder;
 import static org.hamcrest.core.Is.is;
 
-@CrateIntegrationTest.ClusterScope(scope = CrateIntegrationTest.Scope.GLOBAL)
 public class VersionHandlingIntegrationTest extends SQLTransportIntegrationTest {
-
-    static {
-        ClassLoader.getSystemClassLoader().setDefaultAssertionStatus(true);
-    }
 
     private Setup setup = new Setup(sqlExecutor);
 
-    @Rule
-    public ExpectedException expectedException = ExpectedException.none();
-
-
     @Test
     public void selectMultiGetRequestWithColumnAlias() throws IOException {
-        this.setup.createTestIndexWithSomeIdPkMapping();
-        execute("insert into test (some_id, foo) values ('1', 'foo')");
-        execute("insert into test (some_id, foo) values ('2', 'bar')");
-        execute("insert into test (some_id, foo) values ('3', 'baz')");
+        this.setup.createTestTableWithPrimaryKey();
+        execute("insert into test (pk_col, message) values ('1', 'foo')");
+        execute("insert into test (pk_col, message) values ('2', 'bar')");
+        execute("insert into test (pk_col, message) values ('3', 'baz')");
         refresh();
-        execute("SELECT some_id as id, foo from test where some_id IN (?,?)", new Object[]{'1', '2'});
+        execute("SELECT pk_col as id, message from test where pk_col IN (?,?)", new Object[]{"1", "2"});
         assertThat(response.rowCount(), is(2L));
-        assertThat(response.cols(), arrayContainingInAnyOrder("id", "foo"));
+        assertThat(response.cols(), arrayContainingInAnyOrder("id", "message"));
         assertThat(new String[]{(String) response.rows()[0][0], (String) response.rows()[1][0]}, arrayContainingInAnyOrder("1", "2"));
     }
 
     @Test
     public void testDeleteWhereVersion() throws Exception {
         execute("create table test (col1 integer primary key, col2 string) with (number_of_replicas=0)");
-        ensureGreen();
+        ensureYellow();
 
         execute("insert into test (col1, col2) values (?, ?)", new Object[]{1, "don't panic"});
         refresh();
@@ -71,7 +62,7 @@ public class VersionHandlingIntegrationTest extends SQLTransportIntegrationTest 
         Long version = (Long) response.rows()[0][0];
 
         execute("delete from test where col1 = 1 and \"_version\" = ?",
-                new Object[]{version});
+            new Object[]{version});
         assertEquals(1L, response.rowCount());
 
         // Validate that the row is really deleted
@@ -83,7 +74,7 @@ public class VersionHandlingIntegrationTest extends SQLTransportIntegrationTest 
     @Test
     public void testDeleteWhereVersionWithConflict() throws Exception {
         execute("create table test (col1 integer primary key, col2 string)");
-        ensureGreen();
+        ensureYellow();
 
         execute("insert into test (col1, col2) values (?, ?)", new Object[]{1, "don't panic"});
         refresh();
@@ -101,9 +92,9 @@ public class VersionHandlingIntegrationTest extends SQLTransportIntegrationTest 
     }
 
     @Test
-    public void testUpdateWhereVersion() throws Exception {
+    public void testUpdateWhereVersionWithPrimaryKey() throws Exception {
         execute("create table test (col1 integer primary key, col2 string)");
-        ensureGreen();
+        ensureYellow();
 
         execute("insert into test (col1, col2) values (?, ?)", new Object[]{1, "don't panic"});
         refresh();
@@ -113,7 +104,7 @@ public class VersionHandlingIntegrationTest extends SQLTransportIntegrationTest 
         assertEquals(1L, response.rows()[0][0]);
 
         execute("update test set col2 = ? where col1 = ? and \"_version\" = ?",
-                new Object[]{"ok now panic", 1, 1});
+            new Object[]{"ok now panic", 1, 1});
         assertEquals(1L, response.rowCount());
 
         // Validate that the row is really updated
@@ -124,9 +115,19 @@ public class VersionHandlingIntegrationTest extends SQLTransportIntegrationTest 
     }
 
     @Test
+    public void testUpdateWhereVersionWithoutPrimaryKey() throws Exception {
+        expectedException.expect(SQLActionException.class);
+        expectedException.expectMessage(VersionInvalidException.ERROR_MSG);
+        execute("create table test (col1 integer primary key, col2 string)");
+        ensureYellow();
+        execute("update test set col2 = ? where \"_version\" = ?",
+            new Object[]{"ok now panic", 1});
+    }
+
+    @Test
     public void testUpdateWhereVersionWithConflict() throws Exception {
         execute("create table test (col1 integer primary key, col2 string)");
-        ensureGreen();
+        ensureYellow();
 
         execute("insert into test (col1, col2) values (?, ?)", new Object[]{1, "don't panic"});
         refresh();
@@ -136,18 +137,45 @@ public class VersionHandlingIntegrationTest extends SQLTransportIntegrationTest 
         assertEquals(1L, response.rows()[0][0]);
 
         execute("update test set col2 = ? where col1 = ? and \"_version\" = ?",
-                new Object[]{"ok now panic", 1, 1});
+            new Object[]{"ok now panic", 1, 1});
         assertEquals(1L, response.rowCount());
         refresh();
 
-        execute("update test set col2 = ? where col2 = ? and \"_version\" = ?",
-                new Object[]{"already in panic", "ok now panic", 1});
-        assertEquals(0, response.rowCount());
+        execute("update test set col2 = ? where col1 = ? and \"_version\" = ?",
+            new Object[]{"hopefully not updated", 1, 1});
+        assertEquals(0L, response.rowCount());
+        refresh();
 
         // Validate that the row is really NOT updated
         refresh();
         execute("select col2 from test where col1 = 1");
         assertEquals(1L, response.rowCount());
         assertEquals("ok now panic", response.rows()[0][0]);
+    }
+
+    @Test
+    public void testSelectWhereVersionWithoutPrimaryKey() throws Exception {
+        execute("create table test (col1 integer primary key, col2 string)");
+        ensureYellow();
+        expectedException.expect(SQLActionException.class);
+        expectedException.expectMessage(VersionInvalidException.ERROR_MSG);
+        execute("select _version from test where col2 = 'hello' and _version = 1");
+    }
+
+    @Test
+    public void testSelectWhereVersionWithPrimaryKey() throws Exception {
+        execute("create table test (col1 integer primary key, col2 string)");
+        execute("insert into test (col1, col2) values (1, 'foo')");
+        execute("select _version from test where col1 = 1 and _version = 1");
+        assertThat(printedTable(response.rows()), is("1\n"));
+    }
+
+    @Test
+    public void testSelectGroupByVersion() throws Exception {
+        execute("create table test (col1 integer primary key, col2 string)");
+        execute("insert into test (col1, col2) values (1, 'bar'), (2, 'bar')");
+        execute("refresh table test");
+        execute("select col2, count(*) from test where col1 = 1 and _version = 1 group by col2");
+        assertThat(printedTable(response.rows()), is("bar| 1\n"));
     }
 }

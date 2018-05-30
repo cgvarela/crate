@@ -21,16 +21,15 @@
 
 package io.crate.executor.transport;
 
-import io.crate.planner.symbol.Symbol;
-import io.crate.planner.symbol.Value;
+import io.crate.expression.symbol.Symbols;
+import io.crate.expression.symbol.Value;
+import io.crate.test.integration.CrateUnitTest;
 import io.crate.types.DataTypes;
-import org.elasticsearch.common.io.stream.BytesStreamInput;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
+import org.elasticsearch.common.io.stream.StreamInput;
 import org.junit.Test;
 
-import static org.junit.Assert.assertEquals;
-
-public class SymbolSerializerTest {
+public class SymbolSerializerTest extends CrateUnitTest {
 
 
     @Test
@@ -38,10 +37,10 @@ public class SymbolSerializerTest {
         Value v = new Value(DataTypes.STRING);
 
         BytesStreamOutput out = new BytesStreamOutput();
-        Symbol.toStream(v, out);
+        Symbols.toStream(v, out);
 
-        BytesStreamInput in = new BytesStreamInput(out.bytes());
-        Value v2 = (Value) Symbol.fromStream(in);
+        StreamInput in = out.bytes().streamInput();
+        Value v2 = (Value) Symbols.fromStream(in);
         assertEquals(v2.valueType(), DataTypes.STRING);
     }
 }

@@ -21,34 +21,34 @@
 
 package io.crate.sql.tree;
 
-import com.google.common.base.Objects;
-import com.google.common.base.Optional;
-import com.google.common.collect.ImmutableList;
+import com.google.common.base.MoreObjects;
 
-import javax.annotation.Nullable;
 import java.util.List;
+import java.util.Optional;
 
 public class CopyTo extends Statement {
-
 
     private final Table table;
     private final boolean directoryUri;
     private final Expression targetUri;
 
-    private final Optional<GenericProperties> genericProperties;
+    private final GenericProperties genericProperties;
     private final List<Expression> columns;
+    private final Optional<Expression> whereClause;
 
     public CopyTo(Table table,
-                  @Nullable List<Expression> columns,
+                  List<Expression> columns,
+                  Optional<Expression> whereClause,
                   boolean directoryUri,
                   Expression targetUri,
-                  @Nullable GenericProperties genericProperties) {
+                  GenericProperties genericProperties) {
 
         this.table = table;
         this.directoryUri = directoryUri;
         this.targetUri = targetUri;
-        this.genericProperties = Optional.fromNullable(genericProperties);
-        this.columns = Objects.firstNonNull(columns, ImmutableList.<Expression>of());
+        this.genericProperties = genericProperties;
+        this.columns = columns;
+        this.whereClause = whereClause;
     }
 
     public Table table() {
@@ -67,6 +67,14 @@ public class CopyTo extends Statement {
         return columns;
     }
 
+    public GenericProperties genericProperties() {
+        return genericProperties;
+    }
+
+    public Optional<Expression> whereClause() {
+        return whereClause;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -79,6 +87,7 @@ public class CopyTo extends Statement {
         if (!genericProperties.equals(copyTo.genericProperties)) return false;
         if (!table.equals(copyTo.table)) return false;
         if (!targetUri.equals(copyTo.targetUri)) return false;
+        if (!whereClause.equals(copyTo.whereClause)) return false;
 
         return true;
     }
@@ -90,26 +99,24 @@ public class CopyTo extends Statement {
         result = 31 * result + targetUri.hashCode();
         result = 31 * result + genericProperties.hashCode();
         result = 31 * result + columns.hashCode();
+        result = 31 * result + whereClause.hashCode();
         return result;
     }
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("table", table)
-                .add("columns", columns)
-                .add("directoryUri", directoryUri)
-                .add("targetUri", targetUri)
-                .add("genericProperties", genericProperties)
-                .toString();
+        return MoreObjects.toStringHelper(this)
+            .add("table", table)
+            .add("columns", columns)
+            .add("whereClause", whereClause)
+            .add("directoryUri", directoryUri)
+            .add("targetUri", targetUri)
+            .add("genericProperties", genericProperties)
+            .toString();
     }
 
     @Override
     public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitCopyTo(this, context);
-    }
-
-    public Optional<GenericProperties> genericProperties() {
-        return genericProperties;
     }
 }

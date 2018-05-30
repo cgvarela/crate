@@ -21,21 +21,20 @@
 
 package io.crate.sql.tree;
 
-import com.google.common.base.Objects;
-import com.google.common.base.Optional;
+import com.google.common.base.MoreObjects;
 
-import javax.annotation.Nullable;
+import java.util.Optional;
 
 public class CreateBlobTable extends Statement {
 
     private final Table name;
     private final Optional<ClusteredBy> clusteredBy;
-    private final Optional<GenericProperties> genericProperties;
+    private final GenericProperties genericProperties;
 
-    public CreateBlobTable(Table name, @Nullable ClusteredBy clusteredBy, @Nullable GenericProperties properties) {
+    public CreateBlobTable(Table name, Optional<ClusteredBy> clusteredBy, GenericProperties properties) {
         this.name = name;
-        this.clusteredBy = Optional.fromNullable(clusteredBy);
-        this.genericProperties = Optional.fromNullable(properties);
+        this.clusteredBy = clusteredBy;
+        this.genericProperties = properties;
     }
 
     public Table name() {
@@ -46,7 +45,7 @@ public class CreateBlobTable extends Statement {
         return clusteredBy;
     }
 
-    public Optional<GenericProperties> genericProperties() {
+    public GenericProperties genericProperties() {
         return genericProperties;
     }
 
@@ -74,10 +73,10 @@ public class CreateBlobTable extends Statement {
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("name", name)
-                .add("clusteredBy", clusteredBy)
-                .add("properties", genericProperties).toString();
+        return MoreObjects.toStringHelper(this)
+            .add("name", name)
+            .add("clusteredBy", clusteredBy)
+            .add("properties", genericProperties).toString();
     }
 
     @Override

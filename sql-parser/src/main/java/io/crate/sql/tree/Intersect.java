@@ -21,54 +21,43 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableList;
 
-import java.util.List;
+public class Intersect extends SetOperation {
 
-public class Intersect
-        extends SetOperation
-{
-    private final List<Relation> relations;
-    private final boolean distinct;
+    private final Relation left;
+    private final Relation right;
 
-    public Intersect(List<Relation> relations, boolean distinct)
-    {
-        Preconditions.checkNotNull(relations, "relations is null");
-
-        this.relations = ImmutableList.copyOf(relations);
-        this.distinct = distinct;
+    public Intersect(Relation left, Relation right) {
+        this.left  = Preconditions.checkNotNull(left, "relation must not be null");
+        this.right = Preconditions.checkNotNull(right, "relation must not be null");
     }
 
-    public List<Relation> getRelations()
-    {
-        return relations;
+    public Relation getLeft() {
+        return left;
     }
 
-    public boolean isDistinct()
-    {
-        return distinct;
+    public Relation getRight() {
+        return right;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitIntersect(this, context);
     }
 
     @Override
-    public String toString()
-    {
-        return Objects.toStringHelper(this)
-                .add("relations", relations)
-                .add("distinct", distinct)
-                .toString();
+    public String toString() {
+        return MoreObjects.toStringHelper(this)
+            .add("left", left)
+            .add("right", right)
+            .toString();
     }
 
     @Override
-    public boolean equals(Object obj)
-    {
+    public boolean equals(Object obj) {
         if (this == obj) {
             return true;
         }
@@ -76,13 +65,11 @@ public class Intersect
             return false;
         }
         Intersect o = (Intersect) obj;
-        return Objects.equal(relations, o.relations) &&
-                Objects.equal(distinct, o.distinct);
+        return Objects.equal(left, o.left) && Objects.equal(right, o.right);
     }
 
     @Override
-    public int hashCode()
-    {
-        return Objects.hashCode(relations, distinct);
+    public int hashCode() {
+        return Objects.hashCode(left, right);
     }
 }

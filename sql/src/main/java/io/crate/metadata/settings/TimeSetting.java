@@ -31,16 +31,19 @@ public abstract class TimeSetting extends Setting<TimeValue, String> {
         return new TimeValue(60_000);
     }
 
-    public TimeValue maxValue() {
+    TimeValue maxValue() {
         return new TimeValue(Long.MAX_VALUE);
     }
 
-    public TimeValue minValue() {
+    TimeValue minValue() {
         return new TimeValue(0);
     }
 
-    @Override
-    public String extract(Settings settings) {
-        return settings.getAsTime(settingName(), defaultValue()).toString();
+    public long extractMillis(Settings settings) {
+        return extractTimeValue(settings).millis();
+    }
+
+    public TimeValue extractTimeValue(Settings settings) {
+        return settings.getAsTime(name(), defaultValue());
     }
 }

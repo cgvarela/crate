@@ -21,10 +21,31 @@
 
 package io.crate.analyze;
 
+import io.crate.analyze.expressions.ExpressionToColumnIdentVisitor;
+import io.crate.analyze.expressions.ExpressionToStringVisitor;
+import io.crate.data.Row;
 import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.FulltextAnalyzerResolver;
-import io.crate.metadata.ReferenceInfo;
-import io.crate.sql.tree.*;
+import io.crate.metadata.Reference;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.table.TableInfo;
+import io.crate.sql.tree.AddColumnDefinition;
+import io.crate.sql.tree.ArrayLiteral;
+import io.crate.sql.tree.CollectionColumnType;
+import io.crate.sql.tree.ColumnConstraint;
+import io.crate.sql.tree.ColumnDefinition;
+import io.crate.sql.tree.ColumnStorageDefinition;
+import io.crate.sql.tree.ColumnType;
+import io.crate.sql.tree.DefaultTraversalVisitor;
+import io.crate.sql.tree.Expression;
+import io.crate.sql.tree.GenericProperties;
+import io.crate.sql.tree.IndexColumnConstraint;
+import io.crate.sql.tree.IndexDefinition;
+import io.crate.sql.tree.NotNullColumnConstraint;
+import io.crate.sql.tree.ObjectColumnType;
+import io.crate.sql.tree.PrimaryKeyColumnConstraint;
+import io.crate.sql.tree.PrimaryKeyConstraint;
+import io.crate.sql.tree.TableElement;
 import io.crate.types.DataTypes;
 import org.elasticsearch.common.settings.Settings;
 
@@ -35,17 +56,19 @@ import java.util.Locale;
 
 public class TableElementsAnalyzer {
 
-
-    private final static InnerTableElementsAnalyzer analyzer = new InnerTableElementsAnalyzer();
+    private static final InnerTableElementsAnalyzer ANALYZER = new InnerTableElementsAnalyzer();
+    private static final String COLUMN_STORE_PROPERTY = "columnstore";
 
     public static AnalyzedTableElements analyze(List<TableElement> tableElements,
-                                                Object[] parameters,
-                                                FulltextAnalyzerResolver fulltextAnalyzerResolver) {
+                                                Row parameters,
+                                                FulltextAnalyzerResolver fulltextAnalyzerResolver,
+                                                RelationName relationName,
+                                                @Nullable TableInfo tableInfo) {
         AnalyzedTableElements analyzedTableElements = new AnalyzedTableElements();
         for (TableElement tableElement : tableElements) {
             ColumnDefinitionContext ctx = new ColumnDefinitionContext(
-                    null, parameters, fulltextAnalyzerResolver, analyzedTableElements);
-            analyzer.process(tableElement, ctx);
+                null, parameters, fulltextAnalyzerResolver, analyzedTableElements, relationName, tableInfo);
+            ANALYZER.process(tableElement, ctx);
             if (ctx.analyzedColumnDefinition.ident() != null) {
                 analyzedTableElements.add(ctx.analyzedColumnDefinition);
             }
@@ -54,30 +77,38 @@ public class TableElementsAnalyzer {
     }
 
     public static AnalyzedTableElements analyze(TableElement tableElement,
-                                                Object[] parameters,
-                                                FulltextAnalyzerResolver fulltextAnalyzerResolver) {
-        return analyze(Arrays.asList(tableElement), parameters, fulltextAnalyzerResolver);
+                                                Row parameters,
+                                                FulltextAnalyzerResolver fulltextAnalyzerResolver,
+                                                TableInfo tableInfo) {
+        return analyze(Arrays.asList(tableElement), parameters, fulltextAnalyzerResolver, tableInfo.ident(), tableInfo);
     }
 
     private static class ColumnDefinitionContext {
-        final Object[] parameters;
+        private final Row parameters;
         final FulltextAnalyzerResolver fulltextAnalyzerResolver;
         AnalyzedColumnDefinition analyzedColumnDefinition;
         final AnalyzedTableElements analyzedTableElements;
+        final RelationName relationName;
+        @Nullable
+        final TableInfo tableInfo;
 
-        public ColumnDefinitionContext(@Nullable AnalyzedColumnDefinition parent,
-                                       Object[] parameters,
-                                       FulltextAnalyzerResolver fulltextAnalyzerResolver,
-                                       AnalyzedTableElements analyzedTableElements) {
+        ColumnDefinitionContext(@Nullable AnalyzedColumnDefinition parent,
+                                Row parameters,
+                                FulltextAnalyzerResolver fulltextAnalyzerResolver,
+                                AnalyzedTableElements analyzedTableElements,
+                                RelationName relationName,
+                                @Nullable  TableInfo tableInfo) {
             this.analyzedColumnDefinition = new AnalyzedColumnDefinition(parent);
             this.parameters = parameters;
             this.fulltextAnalyzerResolver = fulltextAnalyzerResolver;
             this.analyzedTableElements = analyzedTableElements;
+            this.relationName = relationName;
+            this.tableInfo = tableInfo;
         }
     }
 
     private static class InnerTableElementsAnalyzer
-            extends DefaultTraversalVisitor<Void, ColumnDefinitionContext> {
+        extends DefaultTraversalVisitor<Void, ColumnDefinitionContext> {
 
         @Override
         public Void visitColumnDefinition(ColumnDefinition node, ColumnDefinitionContext context) {
@@ -85,26 +116,44 @@ public class TableElementsAnalyzer {
             for (ColumnConstraint columnConstraint : node.constraints()) {
                 process(columnConstraint, context);
             }
-            process(node.type(), context);
+            if (node.type() != null) {
+                process(node.type(), context);
+            }
+            if (node.expression() != null) {
+                context.analyzedColumnDefinition.generatedExpression(node.expression());
+            }
             return null;
         }
 
         @Override
-        public Void visitNestedColumnDefinition(NestedColumnDefinition node, ColumnDefinitionContext context) {
-            String columnName = ExpressionToStringVisitor.convert(node.name(), context.parameters);
-            ColumnIdent ident = ColumnIdent.fromPath(columnName);
+        public Void visitAddColumnDefinition(AddColumnDefinition node, ColumnDefinitionContext context) {
+            ColumnIdent ident = ExpressionToColumnIdentVisitor.convert(node.name());
             context.analyzedColumnDefinition.name(ident.name());
 
             // nested columns can only be added using alter table so no other columns exist.
-            assert context.analyzedTableElements.columns().size() == 0;
+            assert context.analyzedTableElements.columns().size() == 0 :
+                "context.analyzedTableElements.columns().size() must be 0";
 
-            AnalyzedColumnDefinition root = context.analyzedColumnDefinition;
+            final AnalyzedColumnDefinition root = context.analyzedColumnDefinition;
             if (!ident.path().isEmpty()) {
-                context.analyzedColumnDefinition.isObjectExtension(true);
                 AnalyzedColumnDefinition parent = context.analyzedColumnDefinition;
                 AnalyzedColumnDefinition leaf = parent;
                 for (String name : ident.path()) {
                     parent.dataType(DataTypes.OBJECT.getName());
+                    // Check if parent is already defined.
+                    // If it is an array, set the collection type to array, or if it's an object keep the object column
+                    // policy.
+                    if (context.tableInfo != null) {
+                        Reference parentRef = context.tableInfo.getReference(parent.ident());
+                        if (parentRef != null) {
+                            if (parentRef.valueType().equals(DataTypes.OBJECT_ARRAY)) {
+                                parent.collectionType("array");
+                            } else {
+                                parent.objectType(String.valueOf(parentRef.columnPolicy().mappingValue()));
+                            }
+                        }
+                    }
+                    parent.markAsParentColumn();
                     leaf = new AnalyzedColumnDefinition(parent);
                     leaf.name(name);
                     parent.addChild(leaf);
@@ -116,7 +165,13 @@ public class TableElementsAnalyzer {
             for (ColumnConstraint columnConstraint : node.constraints()) {
                 process(columnConstraint, context);
             }
-            process(node.type(), context);
+            if (node.type() != null) {
+                process(node.type(), context);
+            }
+            if (node.generatedExpression() != null) {
+                context.analyzedColumnDefinition.generatedExpression(node.generatedExpression());
+            }
+
             context.analyzedColumnDefinition = root;
             return null;
         }
@@ -131,7 +186,7 @@ public class TableElementsAnalyzer {
         public Void visitObjectColumnType(ObjectColumnType node, ColumnDefinitionContext context) {
             context.analyzedColumnDefinition.dataType(node.name());
 
-            switch (node.objectType().or("dynamic").toLowerCase(Locale.ENGLISH)) {
+            switch (node.objectType().orElse("dynamic").toLowerCase(Locale.ENGLISH)) {
                 case "dynamic":
                     context.analyzedColumnDefinition.objectType("true");
                     break;
@@ -141,14 +196,17 @@ public class TableElementsAnalyzer {
                 case "ignored":
                     context.analyzedColumnDefinition.objectType("false");
                     break;
+                default:
             }
 
             for (ColumnDefinition columnDefinition : node.nestedColumns()) {
                 ColumnDefinitionContext childContext = new ColumnDefinitionContext(
-                        context.analyzedColumnDefinition,
-                        context.parameters,
-                        context.fulltextAnalyzerResolver,
-                        context.analyzedTableElements
+                    context.analyzedColumnDefinition,
+                    context.parameters,
+                    context.fulltextAnalyzerResolver,
+                    context.analyzedTableElements,
+                    context.relationName,
+                    context.tableInfo
                 );
                 process(columnDefinition, childContext);
                 context.analyzedColumnDefinition.addChild(childContext.analyzedColumnDefinition);
@@ -176,7 +234,7 @@ public class TableElementsAnalyzer {
 
         @Override
         public Void visitPrimaryKeyColumnConstraint(PrimaryKeyColumnConstraint node, ColumnDefinitionContext context) {
-            context.analyzedColumnDefinition.isPrimaryKey(true);
+            context.analyzedColumnDefinition.setPrimaryKeyConstraint();
             return null;
         }
 
@@ -185,31 +243,38 @@ public class TableElementsAnalyzer {
         public Void visitPrimaryKeyConstraint(PrimaryKeyConstraint node, ColumnDefinitionContext context) {
             for (Expression expression : node.columns()) {
                 context.analyzedTableElements.addPrimaryKey(
-                        ExpressionToStringVisitor.convert(expression, context.parameters));
+                    ExpressionToStringVisitor.convert(expression, context.parameters));
             }
             return null;
         }
 
         @Override
         public Void visitIndexColumnConstraint(IndexColumnConstraint node, ColumnDefinitionContext context) {
-            if (node.indexMethod().equalsIgnoreCase("fulltext")) {
+            if (node.indexMethod().equals("fulltext")) {
                 setAnalyzer(node.properties(), context, node.indexMethod());
             } else if (node.indexMethod().equalsIgnoreCase("plain")) {
-                context.analyzedColumnDefinition.index(ReferenceInfo.IndexType.NOT_ANALYZED.toString());
+                context.analyzedColumnDefinition.indexConstraint(Reference.IndexType.NOT_ANALYZED);
             } else if (node.indexMethod().equalsIgnoreCase("OFF")) {
-                context.analyzedColumnDefinition.index(ReferenceInfo.IndexType.NO.toString());
+                context.analyzedColumnDefinition.indexConstraint(Reference.IndexType.NO);
+            } else if (node.indexMethod().equals("quadtree") || node.indexMethod().equals("geohash")) {
+                setGeoType(node.properties(), context, node.indexMethod());
             } else {
                 throw new IllegalArgumentException(
-                        String.format(Locale.ENGLISH, "Invalid index method \"%s\"", node.indexMethod()));
+                    String.format(Locale.ENGLISH, "Invalid index method \"%s\"", node.indexMethod()));
             }
             return null;
         }
 
+        @Override
+        public Void visitNotNullColumnConstraint(NotNullColumnConstraint node, ColumnDefinitionContext context) {
+            context.analyzedColumnDefinition.setNotNullConstraint();
+            return null;
+        }
 
         @Override
         public Void visitIndexDefinition(IndexDefinition node, ColumnDefinitionContext context) {
-            context.analyzedColumnDefinition.isIndex(true);
-            context.analyzedColumnDefinition.dataType("string");
+            context.analyzedColumnDefinition.setAsIndexColumn();
+            context.analyzedColumnDefinition.dataType("text");
             context.analyzedColumnDefinition.name(node.ident());
 
             setAnalyzer(node.properties(), context, node.method());
@@ -221,9 +286,31 @@ public class TableElementsAnalyzer {
             return null;
         }
 
+        @Override
+        public Void visitColumnStorageDefinition(ColumnStorageDefinition node, ColumnDefinitionContext context) {
+            Settings storageSettings = GenericPropertiesConverter.genericPropertiesToSettings(node.properties(),
+                context.parameters);
+
+            for (String property : storageSettings.names()) {
+                if (property.equals(COLUMN_STORE_PROPERTY)) {
+                    context.analyzedColumnDefinition.setColumnStore(storageSettings.getAsBoolean(property, true));
+                } else {
+                    throw new IllegalArgumentException(
+                        String.format(Locale.ENGLISH, "Invalid storage option \"%s\"", storageSettings.get(property)));
+                }
+            }
+            return null;
+        }
+
+        private void setGeoType(GenericProperties properties, ColumnDefinitionContext context, String indexMethod) {
+            context.analyzedColumnDefinition.geoTree(indexMethod);
+            Settings geoSettings = GenericPropertiesConverter.genericPropertiesToSettings(properties, context.parameters);
+            context.analyzedColumnDefinition.geoSettings(geoSettings);
+        }
+
         private void setAnalyzer(GenericProperties properties, ColumnDefinitionContext context,
                                  String indexMethod) {
-            context.analyzedColumnDefinition.index(ReferenceInfo.IndexType.ANALYZED.toString());
+            context.analyzedColumnDefinition.indexConstraint(Reference.IndexType.ANALYZED);
 
             Expression analyzerExpression = properties.get("analyzer");
             if (analyzerExpression == null) {

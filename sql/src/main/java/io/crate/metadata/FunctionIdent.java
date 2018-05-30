@@ -26,6 +26,7 @@ import com.google.common.collect.ComparisonChain;
 import com.google.common.collect.Ordering;
 import io.crate.types.DataType;
 import io.crate.types.DataTypes;
+import org.elasticsearch.common.inject.internal.Nullable;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Streamable;
@@ -36,16 +37,26 @@ import java.util.List;
 
 public class FunctionIdent implements Comparable<FunctionIdent>, Streamable {
 
+    private String schema;
     private String name;
     private List<DataType> argumentTypes;
 
     public FunctionIdent() {
+    }
 
+    public FunctionIdent(@Nullable String schema, String name, List<DataType> argumentTypes) {
+        this.schema = schema;
+        this.name = name;
+        this.argumentTypes = argumentTypes;
     }
 
     public FunctionIdent(String name, List<DataType> argumentTypes) {
         this.name = name;
         this.argumentTypes = argumentTypes;
+    }
+
+    public String schema() {
+        return schema;
     }
 
     public List<DataType> argumentTypes() {
@@ -66,34 +77,38 @@ public class FunctionIdent implements Comparable<FunctionIdent>, Streamable {
         }
 
         FunctionIdent o = (FunctionIdent) obj;
-        return name.equalsIgnoreCase(o.name) &&
-                Objects.equal(argumentTypes, o.argumentTypes);
+        return Objects.equal(schema, o.schema) &&
+            Objects.equal(name, o.name) &&
+            Objects.equal(argumentTypes, o.argumentTypes);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(name, argumentTypes);
+        return Objects.hashCode(schema, name, argumentTypes);
     }
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("name", name)
-                .add("argumentTypes", argumentTypes)
-                .toString();
+        return "FunctionIdent{" +
+            "schema='" + schema + '\'' +
+            ", name='" + name + '\'' +
+            ", argumentTypes=" + argumentTypes +
+            '}';
     }
 
     @Override
     public int compareTo(FunctionIdent o) {
         return ComparisonChain.start()
-                .compare(name, o.name)
-                .compare(argumentTypes, o.argumentTypes, Ordering.<DataType>natural().lexicographical())
-                .result();
+            .compare(schema, o.schema)
+            .compare(name, o.name)
+            .compare(argumentTypes, o.argumentTypes, Ordering.<DataType>natural().lexicographical())
+            .result();
     }
 
 
     @Override
     public void readFrom(StreamInput in) throws IOException {
+        schema = in.readOptionalString();
         name = in.readString();
         int numTypes = in.readVInt();
         argumentTypes = new ArrayList<>(numTypes);
@@ -105,6 +120,7 @@ public class FunctionIdent implements Comparable<FunctionIdent>, Streamable {
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
+        out.writeOptionalString(schema);
         out.writeString(name);
         out.writeVInt(argumentTypes.size());
 

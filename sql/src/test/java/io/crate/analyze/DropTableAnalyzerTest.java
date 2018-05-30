@@ -21,78 +21,117 @@
 
 package io.crate.analyze;
 
-import io.crate.metadata.MetaDataModule;
-import io.crate.metadata.doc.DocSchemaInfo;
-import io.crate.metadata.information.MetaDataInformationModule;
-import io.crate.metadata.sys.MetaDataSysModule;
-import io.crate.metadata.table.SchemaInfo;
-import io.crate.operation.operator.OperatorModule;
+import com.google.common.collect.ImmutableList;
+import io.crate.exceptions.OperationOnInaccessibleRelationException;
+import io.crate.exceptions.RelationUnknown;
 import io.crate.exceptions.SchemaUnknownException;
-import io.crate.exceptions.TableUnknownException;
-import org.elasticsearch.common.inject.Module;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.doc.DocSchemaInfo;
+import io.crate.metadata.doc.DocTableInfo;
+import io.crate.metadata.table.TestingTableInfo;
+import io.crate.test.integration.CrateDummyClusterServiceUnitTest;
+import io.crate.testing.SQLExecutor;
+import io.crate.types.DataTypes;
+import org.junit.Before;
 import org.junit.Test;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Locale;
-
-import static org.hamcrest.MatcherAssert.assertThat;
+import static io.crate.analyze.TableDefinitions.SHARD_ROUTING;
+import static io.crate.analyze.TableDefinitions.USER_TABLE_IDENT;
+import static java.util.Locale.ENGLISH;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
-public class DropTableAnalyzerTest extends BaseAnalyzerTest {
+public class DropTableAnalyzerTest extends CrateDummyClusterServiceUnitTest {
 
-    static class TestMetaDataModule extends MetaDataModule {
-        @Override
-        protected void bindSchemas() {
-            super.bindSchemas();
-            SchemaInfo schemaInfo = mock(SchemaInfo.class);
-            when(schemaInfo.getTableInfo(TEST_DOC_TABLE_IDENT.name())).thenReturn(userTableInfo);
-            schemaBinder.addBinding(DocSchemaInfo.NAME).toInstance(schemaInfo);
-        }
+    private final RelationName aliasIdent = new RelationName(DocSchemaInfo.NAME, "alias_table");
+    private final DocTableInfo aliasInfo = TestingTableInfo.builder(aliasIdent, SHARD_ROUTING)
+        .add("col", DataTypes.STRING, ImmutableList.<String>of())
+        .isAlias(true)
+        .build();
+
+    private SQLExecutor e;
+
+    @Before
+    public void prepare() {
+        e = SQLExecutor.builder(clusterService).enableDefaultTables().addDocTable(aliasInfo).build();
     }
 
-    @Override
-    protected List<Module> getModules() {
-        List<Module> modules = super.getModules();
-        modules.addAll(Arrays.<Module>asList(
-                new TestModule(),
-                new MetaDataInformationModule(),
-                new TestMetaDataModule(),
-                new MetaDataSysModule(),
-                new OperatorModule())
-        );
-        return modules;
-    }
-
-    @Test( expected = TableUnknownException.class )
+    @Test
     public void testDropNonExistingTable() throws Exception {
-        analyze("drop table unknown");
+        expectedException.expect(RelationUnknown.class);
+        expectedException.expectMessage("Relation 'doc.unknown' unknown");
+        e.analyze("drop table unknown");
     }
 
-    @Test( expected = UnsupportedOperationException.class)
+    @Test
     public void testDropSystemTable() throws Exception {
-        analyze("drop table sys.cluster");
+        expectedException.expect(OperationOnInaccessibleRelationException.class);
+        expectedException.expectMessage("The relation \"sys.cluster\" doesn't support or allow DROP " +
+                                        "operations, as it is read-only.");
+        e.analyze("drop table sys.cluster");
     }
 
-    @Test( expected = UnsupportedOperationException.class )
+    @Test
     public void testDropInformationSchemaTable() throws Exception {
-        analyze("drop table information_schema.tables");
+        expectedException.expect(OperationOnInaccessibleRelationException.class);
+        expectedException.expectMessage("The relation \"information_schema.tables\" doesn't support or allow " +
+                                        "DROP operations, as it is read-only.");
+        e.analyze("drop table information_schema.tables");
     }
 
-    @Test( expected = SchemaUnknownException.class )
+    @Test
     public void testDropUnknownSchema() throws Exception {
-        analyze("drop table unknown_schema.unknown");
+        expectedException.expect(SchemaUnknownException.class);
+        expectedException.expectMessage("Schema 'unknown_schema' unknown");
+        e.analyze("drop table unknown_schema.unknown");
+    }
+
+    @Test
+    public void testDropTableIfExistsWithUnknownSchema() throws Exception {
+        // shouldn't raise SchemaUnknownException / RelationUnknown
+        e.analyze("drop table if exists unknown_schema.unknown");
     }
 
     @Test
     public void testDropExistingTable() throws Exception {
-        Analysis analysis = analyze(String.format(Locale.ENGLISH, "drop table %s", TEST_DOC_TABLE_IDENT.name()));
-        assertThat(analysis, instanceOf(DropTableAnalysis.class));
-        DropTableAnalysis dropTableAnalysis = (DropTableAnalysis) analysis;
+        AnalyzedStatement analyzedStatement = e.analyze(String.format(ENGLISH, "drop table %s", USER_TABLE_IDENT.name()));
+        assertThat(analyzedStatement, instanceOf(DropTableAnalyzedStatement.class));
+        DropTableAnalyzedStatement dropTableAnalysis = (DropTableAnalyzedStatement) analyzedStatement;
+        assertThat(dropTableAnalysis.dropIfExists(), is(false));
+        assertThat(dropTableAnalysis.index(), is(USER_TABLE_IDENT.name()));
+    }
 
-        assertThat(dropTableAnalysis.index(), is(TEST_DOC_TABLE_IDENT.name()));
+    @Test
+    public void testDropIfExistExistingTable() throws Exception {
+        AnalyzedStatement analyzedStatement = e.analyze(String.format(ENGLISH, "drop table if exists %s", USER_TABLE_IDENT.name()));
+        assertThat(analyzedStatement, instanceOf(DropTableAnalyzedStatement.class));
+        DropTableAnalyzedStatement dropTableAnalysis = (DropTableAnalyzedStatement) analyzedStatement;
+        assertThat(dropTableAnalysis.dropIfExists(), is(true));
+        assertThat(dropTableAnalysis.index(), is(USER_TABLE_IDENT.name()));
+    }
+
+    @Test
+    public void testNonExistentTableIsRecognizedCorrectly() throws Exception {
+        AnalyzedStatement analyzedStatement = e.analyze("drop table if exists unknowntable");
+        assertThat(analyzedStatement, instanceOf(DropTableAnalyzedStatement.class));
+        DropTableAnalyzedStatement dropTableAnalysis = (DropTableAnalyzedStatement) analyzedStatement;
+        assertThat(dropTableAnalysis.dropIfExists(), is(true));
+        assertThat(dropTableAnalysis.noop(), is(true));
+    }
+
+    @Test
+    public void testDropAliasFails() throws Exception {
+        expectedException.expect(OperationOnInaccessibleRelationException.class);
+        expectedException.expectMessage("The relation \"doc.alias_table\" doesn't support or allow DROP " +
+                                        "operations, as it is read-only.");
+        e.analyze("drop table alias_table");
+    }
+
+    @Test
+    public void testDropAliasIfExists() throws Exception {
+        expectedException.expect(OperationOnInaccessibleRelationException.class);
+        expectedException.expectMessage("The relation \"doc.alias_table\" doesn't support or allow DROP " +
+                                        "operations, as it is read-only.");
+        e.analyze("drop table if exists alias_table");
     }
 }

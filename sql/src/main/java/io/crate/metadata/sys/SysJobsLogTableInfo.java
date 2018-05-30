@@ -22,57 +22,63 @@
 package io.crate.metadata.sys;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import io.crate.action.sql.SessionContext;
 import io.crate.analyze.WhereClause;
-import io.crate.metadata.*;
-import io.crate.planner.RowGranularity;
-import io.crate.types.DataType;
+import io.crate.metadata.ColumnIdent;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.Routing;
+import io.crate.metadata.RoutingProvider;
+import io.crate.metadata.RowContextCollectorExpression;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.expressions.RowCollectExpressionFactory;
+import io.crate.metadata.table.ColumnRegistrar;
+import io.crate.metadata.table.StaticTableInfo;
+import io.crate.expression.reference.sys.job.JobContextLog;
 import io.crate.types.DataTypes;
-import org.elasticsearch.cluster.ClusterService;
-import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.cluster.ClusterState;
 
-import javax.annotation.Nullable;
-import java.util.*;
+import java.util.List;
 
-public class SysJobsLogTableInfo extends SysTableInfo {
+public class SysJobsLogTableInfo extends StaticTableInfo {
 
-    public static final TableIdent IDENT = new TableIdent(SCHEMA, "jobs_log");
-    public static final Map<ColumnIdent, ReferenceInfo> INFOS = new LinkedHashMap<>();
-    private static final String[] INDICES = new String[] { IDENT.name() };
-    private static final LinkedHashSet<ReferenceInfo> columns = new LinkedHashSet<>();
-    private static final List<ColumnIdent> primaryKeys = ImmutableList.of(new ColumnIdent("id"));
+    public static final RelationName IDENT = new RelationName(SysSchemaInfo.NAME, "jobs_log");
+    private static final List<ColumnIdent> PRIMARY_KEYS = ImmutableList.of(Columns.ID);
 
-    static {
-        register("id", DataTypes.STRING, null);
-        register("stmt", DataTypes.STRING, null);
-        register("started", DataTypes.TIMESTAMP, null);
-        register("ended", DataTypes.TIMESTAMP, null);
-        register("error", DataTypes.STRING, null);
+    public static class Columns {
+        public static final ColumnIdent ID = new ColumnIdent("id");
+        static final ColumnIdent USERNAME = new ColumnIdent("username");
+        static final ColumnIdent STMT = new ColumnIdent("stmt");
+        public static final ColumnIdent STARTED = new ColumnIdent("started");
+        static final ColumnIdent ENDED = new ColumnIdent("ended");
+        public static final ColumnIdent ERROR = new ColumnIdent("error");
     }
 
-    @Inject
-    public SysJobsLogTableInfo(ClusterService clusterService, SysSchemaInfo sysSchemaInfo) {
-        super(clusterService, sysSchemaInfo);
+    public static ImmutableMap<ColumnIdent, RowCollectExpressionFactory<JobContextLog>> expressions() {
+        return ImmutableMap.<ColumnIdent, RowCollectExpressionFactory<JobContextLog>>builder()
+            .put(SysJobsLogTableInfo.Columns.ID,
+                () -> RowContextCollectorExpression.objToBytesRef(JobContextLog::id))
+            .put(SysJobsTableInfo.Columns.USERNAME,
+                () -> RowContextCollectorExpression.objToBytesRef(JobContextLog::username))
+            .put(SysJobsLogTableInfo.Columns.STMT,
+                () -> RowContextCollectorExpression.objToBytesRef(JobContextLog::statement))
+            .put(SysJobsLogTableInfo.Columns.STARTED,
+                () -> RowContextCollectorExpression.forFunction(JobContextLog::started))
+            .put(SysJobsLogTableInfo.Columns.ENDED,
+                () -> RowContextCollectorExpression.forFunction(JobContextLog::ended))
+            .put(SysJobsLogTableInfo.Columns.ERROR,
+                () -> RowContextCollectorExpression.objToBytesRef(JobContextLog::errorMessage))
+            .build();
     }
 
-    private static ReferenceInfo register(String column, DataType type, List<String> path) {
-        ReferenceInfo info = new ReferenceInfo(new ReferenceIdent(IDENT, column, path), RowGranularity.DOC, type);
-        if (info.ident().isColumn()) {
-            columns.add(info);
-        }
-        INFOS.put(info.ident().columnIdent(), info);
-        return info;
-    }
-
-
-    @Nullable
-    @Override
-    public ReferenceInfo getReferenceInfo(ColumnIdent columnIdent) {
-        return INFOS.get(columnIdent);
-    }
-
-    @Override
-    public Collection<ReferenceInfo> columns() {
-        return columns;
+    SysJobsLogTableInfo() {
+        super(IDENT, new ColumnRegistrar(IDENT, RowGranularity.DOC)
+            .register(Columns.ID, DataTypes.STRING)
+            .register(Columns.USERNAME, DataTypes.STRING)
+            .register(Columns.STMT, DataTypes.STRING)
+            .register(Columns.STARTED, DataTypes.TIMESTAMP)
+            .register(Columns.ENDED, DataTypes.TIMESTAMP)
+            .register(Columns.ERROR, DataTypes.STRING), PRIMARY_KEYS);
     }
 
     @Override
@@ -81,27 +87,11 @@ public class SysJobsLogTableInfo extends SysTableInfo {
     }
 
     @Override
-    public TableIdent ident() {
-        return IDENT;
-    }
-
-    @Override
-    public Routing getRouting(WhereClause whereClause) {
-        return tableRouting(whereClause);
-    }
-
-    @Override
-    public List<ColumnIdent> primaryKey() {
-        return primaryKeys;
-    }
-
-    @Override
-    public String[] concreteIndices() {
-        return INDICES;
-    }
-
-    @Override
-    public Iterator<ReferenceInfo> iterator() {
-        return INFOS.values().iterator();
+    public Routing getRouting(ClusterState clusterState,
+                              RoutingProvider routingProvider,
+                              WhereClause whereClause,
+                              RoutingProvider.ShardSelection shardSelection,
+                              SessionContext sessionContext) {
+        return Routing.forTableOnAllNodes(IDENT, clusterState.getNodes());
     }
 }

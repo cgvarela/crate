@@ -22,21 +22,20 @@
 package io.crate.sql.tree;
 
 import com.google.common.base.Objects;
-import com.google.common.collect.ImmutableList;
 
-import javax.annotation.Nullable;
+import java.util.Collections;
 import java.util.List;
 
 public abstract class Insert extends Statement {
 
     protected final Table table;
-
+    private final DuplicateKeyContext duplicateKeyContext;
     protected final List<String> columns;
 
-
-    public Insert(Table table, @Nullable List<String> columns) {
+    Insert(Table table, List<String> columns, DuplicateKeyContext duplicateKeyContext) {
         this.table = table;
-        this.columns = Objects.firstNonNull(columns, ImmutableList.<String>of());
+        this.columns = columns;
+        this.duplicateKeyContext = duplicateKeyContext;
     }
 
     public Table table() {
@@ -45,6 +44,10 @@ public abstract class Insert extends Statement {
 
     public List<String> columns() {
         return columns;
+    }
+
+    public DuplicateKeyContext getDuplicateKeyContext() {
+        return duplicateKeyContext;
     }
 
     @Override
@@ -70,5 +73,43 @@ public abstract class Insert extends Statement {
     @Override
     public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitInsert(this, context);
+    }
+
+
+    public static class DuplicateKeyContext {
+
+        public static final DuplicateKeyContext NONE =
+            new DuplicateKeyContext(Type.NONE, Collections.emptyList(), Collections.emptyList());
+
+        public enum Type {
+            ON_DUPLICATE_KEY_UPDATE,
+            ON_CONFLICT_DO_UPDATE_SET,
+            ON_CONFLICT_DO_NOTHING,
+            NONE
+        }
+
+        private final Type type;
+        private final List<Assignment> onDuplicateKeyAssignments;
+        private final List<String> constraintColumns;
+
+        public DuplicateKeyContext(Type type,
+                                   List<Assignment> onDuplicateKeyAssignments,
+                                   List<String> constraintColumns) {
+            this.type = type;
+            this.onDuplicateKeyAssignments = onDuplicateKeyAssignments;
+            this.constraintColumns = constraintColumns;
+        }
+
+        public Type getType() {
+            return type;
+        }
+
+        public List<Assignment> getAssignments() {
+            return onDuplicateKeyAssignments;
+        }
+
+        public List<String> getConstraintColumns() {
+            return constraintColumns;
+        }
     }
 }

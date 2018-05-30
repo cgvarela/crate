@@ -21,18 +21,18 @@
 
 package io.crate.exceptions;
 
-public class TableAliasSchemaException extends ConflictException {
+import io.crate.metadata.RelationName;
 
-    private String tableName;
+import java.util.Collections;
+import java.util.Locale;
 
-    public TableAliasSchemaException(String tableName, Throwable e) {
-        super("Table alias contains tables with different schema", e);
-        this.tableName = tableName;
-    }
+public class TableAliasSchemaException extends ConflictException implements TableScopeException {
 
-    public TableAliasSchemaException(String tableName) {
-        super("Table alias contains tables with different schema");
-        this.tableName = tableName;
+    private RelationName relationName;
+
+    public TableAliasSchemaException(RelationName relationName) {
+        super(String.format(Locale.ENGLISH, "Table alias \"%s\" contains tables with different schema", relationName.name()));
+        this.relationName = relationName;
     }
 
     @Override
@@ -41,7 +41,7 @@ public class TableAliasSchemaException extends ConflictException {
     }
 
     @Override
-    public Object[] args() {
-        return new Object[]{tableName};
+    public Iterable<RelationName> getTableIdents() {
+        return Collections.singletonList(relationName);
     }
 }

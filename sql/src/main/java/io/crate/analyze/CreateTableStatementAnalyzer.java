@@ -18,111 +18,146 @@
  * with Crate these terms will supersede the license and you may use the
  * software solely pursuant to the terms of the relevant commercial agreement.
  */
+
 package io.crate.analyze;
 
-import com.google.common.base.Preconditions;
-import com.google.common.base.Strings;
-import io.crate.Constants;
-import io.crate.metadata.*;
-import io.crate.sql.tree.*;
+import io.crate.analyze.expressions.ExpressionToStringVisitor;
+import io.crate.data.Row;
+import io.crate.metadata.ColumnIdent;
+import io.crate.metadata.FulltextAnalyzerResolver;
+import io.crate.metadata.Functions;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.Schemas;
+import io.crate.metadata.TransactionContext;
+import io.crate.sql.tree.ClusteredBy;
+import io.crate.sql.tree.CrateTableOption;
+import io.crate.sql.tree.CreateTable;
+import io.crate.sql.tree.DefaultTraversalVisitor;
+import io.crate.sql.tree.Expression;
+import io.crate.sql.tree.Node;
+import io.crate.sql.tree.PartitionedBy;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
-import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.settings.Settings;
 
+import java.util.Collections;
 import java.util.Locale;
 
+public class CreateTableStatementAnalyzer extends DefaultTraversalVisitor<CreateTableAnalyzedStatement,
+    CreateTableStatementAnalyzer.Context> {
 
-public class CreateTableStatementAnalyzer extends AbstractStatementAnalyzer<Void, CreateTableAnalysis> {
-
-    private static final TablePropertiesAnalysis tablePropertiesAnalysis = new TablePropertiesAnalysis();
-    private final ReferenceInfos referenceInfos;
+    private static final String CLUSTERED_BY_IN_PARTITIONED_ERROR = "Cannot use CLUSTERED BY column in PARTITIONED BY clause";
+    private final Schemas schemas;
     private final FulltextAnalyzerResolver fulltextAnalyzerResolver;
+    private final Functions functions;
+    private final NumberOfShards numberOfShards;
 
-    @Inject
-    public CreateTableStatementAnalyzer(ReferenceInfos referenceInfos,
-                                        FulltextAnalyzerResolver fulltextAnalyzerResolver) {
-        this.referenceInfos = referenceInfos;
+    static class Context {
+
+        private final CreateTableAnalyzedStatement statement;
+        private final ParameterContext parameterContext;
+
+        public Context(CreateTableAnalyzedStatement statement, ParameterContext parameterContext) {
+            this.statement = statement;
+            this.parameterContext = parameterContext;
+        }
+    }
+
+
+    public CreateTableStatementAnalyzer(Schemas schemas,
+                                        FulltextAnalyzerResolver fulltextAnalyzerResolver,
+                                        Functions functions,
+                                        NumberOfShards numberOfShards) {
+        this.schemas = schemas;
         this.fulltextAnalyzerResolver = fulltextAnalyzerResolver;
+        this.functions = functions;
+        this.numberOfShards = numberOfShards;
     }
 
     @Override
-    public Analysis newAnalysis(Analyzer.ParameterContext parameterContext) {
-        return new CreateTableAnalysis(referenceInfos, fulltextAnalyzerResolver, parameterContext);
-    }
-
-    protected Void visitNode(Node node, CreateTableAnalysis context) {
+    protected CreateTableAnalyzedStatement visitNode(Node node, Context context) {
         throw new RuntimeException(
-                String.format("Encountered node %s but expected a CreateTable node", node));
+            String.format(Locale.ENGLISH, "Encountered node %s but expected a CreateTable node", node));
     }
 
-    @Override
-    public Void visitCreateTable(CreateTable node, CreateTableAnalysis context) {
-        TableIdent tableIdent = TableIdent.of(node.name());
-        Preconditions.checkArgument(Strings.isNullOrEmpty(tableIdent.schema()),
-                "A custom schema name must not be specified in the CREATE TABLE clause");
-        context.table(tableIdent);
+    public CreateTableAnalyzedStatement analyze(CreateTable createTable,
+                                                ParameterContext parameterContext,
+                                                TransactionContext transactionContext) {
+        CreateTableAnalyzedStatement statement = new CreateTableAnalyzedStatement();
+        Row parameters = parameterContext.parameters();
+        RelationName relationName = RelationName.of(createTable.name(), transactionContext.sessionContext().defaultSchema());
+        statement.table(relationName, createTable.ifNotExists(), schemas);
 
         // apply default in case it is not specified in the genericProperties,
         // if it is it will get overwritten afterwards.
-        if (node.properties().isPresent()) {
-            Settings settings =
-                    tablePropertiesAnalysis.propertiesToSettings(node.properties().get(), context.parameters(), true);
-            context.indexSettingsBuilder().put(settings);
-        }
+        TablePropertiesAnalyzer.analyze(
+            statement.tableParameter(),
+            new TableParameterInfo(),
+            createTable.properties(),
+            parameters,
+            true
+        );
+        AnalyzedTableElements tableElements = TableElementsAnalyzer.analyze(
+            createTable.tableElements(), parameters, fulltextAnalyzerResolver, relationName, null);
 
-        context.analyzedTableElements(TableElementsAnalyzer.analyze(
-                node.tableElements(),
-                context.parameters(),
-                context.fulltextAnalyzerResolver()));
+        // validate table elements
+        tableElements.finalizeAndValidate(
+            relationName,
+            Collections.emptyList(),
+            functions,
+            parameterContext,
+            transactionContext);
 
-        context.analyzedTableElements().finalizeAndValidate();
+        // update table settings
+        statement.tableParameter().settingsBuilder().put(tableElements.settings());
+        statement.tableParameter().settingsBuilder().put(
+            IndexMetaData.SETTING_NUMBER_OF_SHARDS, numberOfShards.defaultNumberOfShards());
 
-        for (CrateTableOption option : node.crateTableOptions()) {
+        Context context = new Context(statement, parameterContext);
+        statement.analyzedTableElements(tableElements);
+        for (CrateTableOption option : createTable.crateTableOptions()) {
             process(option, context);
         }
-        return null;
+        return statement;
     }
 
     @Override
-    public Void visitClusteredBy(ClusteredBy node, CreateTableAnalysis context) {
-        if (node.column().isPresent()) {
+    public CreateTableAnalyzedStatement visitClusteredBy(ClusteredBy clusteredBy, Context context) {
+        if (clusteredBy.column().isPresent()) {
             ColumnIdent routingColumn = ColumnIdent.fromPath(
-                    ExpressionToStringVisitor.convert(node.column().get(), context.parameters()));
+                ExpressionToStringVisitor.convert(clusteredBy.column().get(), context.parameterContext.parameters()));
 
-            if (!context.hasColumnDefinition(routingColumn)) {
-                throw new IllegalArgumentException(
-                        String.format(Locale.ENGLISH, "Invalid or non-existent routing column \"%s\"",
-                                routingColumn));
+            for (AnalyzedColumnDefinition column : context.statement.analyzedTableElements().partitionedByColumns) {
+                if (column.ident().equals(routingColumn)) {
+                    throw new IllegalArgumentException(CLUSTERED_BY_IN_PARTITIONED_ERROR);
+                }
             }
-            if (context.primaryKeys().size() > 0 && !context.primaryKeys().contains(routingColumn.fqn())) {
+            if (!context.statement.hasColumnDefinition(routingColumn)) {
+                throw new IllegalArgumentException(
+                    String.format(Locale.ENGLISH, "Invalid or non-existent routing column \"%s\"",
+                        routingColumn));
+            }
+            if (context.statement.primaryKeys().size() > 0 &&
+                !context.statement.primaryKeys().contains(routingColumn.fqn())) {
                 throw new IllegalArgumentException("Clustered by column must be part of primary keys");
             }
 
-            context.routing(routingColumn);
+            context.statement.routing(routingColumn);
         }
-        int numShards;
-        if (node.numberOfShards().isPresent()) {
-            numShards = ExpressionToNumberVisitor.convert(node.numberOfShards().get(), context.parameters()).intValue();
-            if (numShards < 1) {
-                throw new IllegalArgumentException("num_shards in CLUSTERED clause must be greater than 0");
-            }
-        } else {
-            numShards = Constants.DEFAULT_NUM_SHARDS;
-        }
-        context.indexSettingsBuilder().put(IndexMetaData.SETTING_NUMBER_OF_SHARDS, numShards);
-        return null;
+        context.statement.tableParameter().settingsBuilder().put(
+            IndexMetaData.SETTING_NUMBER_OF_SHARDS,
+            numberOfShards.fromClusteredByClause(clusteredBy, context.parameterContext.parameters())
+        );
+        return context.statement;
     }
 
     @Override
-    public Void visitPartitionedBy(PartitionedBy node, CreateTableAnalysis context) {
+    public CreateTableAnalyzedStatement visitPartitionedBy(PartitionedBy node, Context context) {
         for (Expression partitionByColumn : node.columns()) {
             ColumnIdent partitionedByIdent = ColumnIdent.fromPath(
-                    ExpressionToStringVisitor.convert(partitionByColumn, context.parameters()));
-            context.analyzedTableElements().changeToPartitionedByColumn(partitionedByIdent);
-            ColumnIdent routing = context.routing();
+                ExpressionToStringVisitor.convert(partitionByColumn, context.parameterContext.parameters()));
+            context.statement.analyzedTableElements().changeToPartitionedByColumn(partitionedByIdent, false, context.statement.tableIdent());
+            ColumnIdent routing = context.statement.routing();
             if (routing != null && routing.equals(partitionedByIdent)) {
-                throw new IllegalArgumentException(
-                        "Cannot use CLUSTERED BY column in PARTITIONED BY clause");
+                throw new IllegalArgumentException(CLUSTERED_BY_IN_PARTITIONED_ERROR);
             }
         }
         return null;

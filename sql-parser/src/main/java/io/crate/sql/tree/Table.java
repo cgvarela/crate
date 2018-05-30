@@ -21,32 +21,38 @@
 
 package io.crate.sql.tree;
 
-import com.google.common.base.Objects;
+import com.google.common.base.MoreObjects;
 import com.google.common.collect.ImmutableList;
 
-import javax.annotation.Nullable;
 import java.util.List;
 
-public class Table
-        extends QueryBody
-{
+public class Table extends QueryBody {
     private final QualifiedName name;
+    private final boolean excludePartitions;
     private final List<Assignment> partitionProperties;
 
-    public Table(QualifiedName name)
-    {
+    public Table(QualifiedName name) {
+        this(name, true);
+    }
+
+    public Table(QualifiedName name, boolean excludePartitions) {
         this.name = name;
+        this.excludePartitions = excludePartitions;
         this.partitionProperties = ImmutableList.of();
     }
 
-    public Table(QualifiedName name, @Nullable List<Assignment> partitionProperties) {
+    public Table(QualifiedName name, List<Assignment> partitionProperties) {
         this.name = name;
-        this.partitionProperties = Objects.firstNonNull(partitionProperties, ImmutableList.<Assignment>of());
+        this.excludePartitions = false;
+        this.partitionProperties = partitionProperties;
     }
 
-    public QualifiedName getName()
-    {
+    public QualifiedName getName() {
         return name;
+    }
+
+    public boolean excludePartitions() {
+        return excludePartitions;
     }
 
     public List<Assignment> partitionProperties() {
@@ -54,18 +60,17 @@ public class Table
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitTable(this, context);
     }
 
     @Override
-    public String toString()
-    {
-        return Objects.toStringHelper(this)
-                .addValue(name)
-                .add("partitionProperties", partitionProperties)
-                .toString();
+    public String toString() {
+        return MoreObjects.toStringHelper(this)
+            .add("only", excludePartitions)
+            .addValue(name)
+            .add("partitionProperties", partitionProperties)
+            .toString();
     }
 
     @Override
@@ -73,10 +78,10 @@ public class Table
         if (this == o) return true;
         if (!(o instanceof Table)) return false;
 
-        Table table = (Table) o;
+        Table that = (Table) o;
 
-        if (!name.equals(table.name)) return false;
-        if (!partitionProperties.equals(table.partitionProperties)) return false;
+        if (!name.equals(that.name)) return false;
+        if (!partitionProperties.equals(that.partitionProperties)) return false;
 
         return true;
     }

@@ -28,16 +28,22 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 
-public class ByteType extends DataType<Byte> implements DataTypeFactory, Streamer<Byte> {
+public class ByteType extends DataType<Byte> implements Streamer<Byte>, FixedWidthType {
 
-    public final static ByteType INSTANCE = new ByteType();
-    public final static int ID = 2;
+    public static final ByteType INSTANCE = new ByteType();
+    public static final int ID = 2;
 
-    private ByteType() {}
+    private ByteType() {
+    }
 
     @Override
     public int id() {
         return ID;
+    }
+
+    @Override
+    public Precedence precedence() {
+        return Precedence.ByteType;
     }
 
     @Override
@@ -56,12 +62,12 @@ public class ByteType extends DataType<Byte> implements DataTypeFactory, Streame
             return null;
         }
         if (value instanceof String) {
-            return Byte.parseByte((String)value);
+            return Byte.parseByte((String) value);
         }
         if (value instanceof BytesRef) {
-            return Byte.parseByte(((BytesRef)value).utf8ToString());
+            return Byte.parseByte(((BytesRef) value).utf8ToString());
         }
-        Integer val = ((Number)value).intValue();
+        Integer val = ((Number) value).intValue();
         if (val < Byte.MIN_VALUE || Byte.MAX_VALUE < val) {
             throw new IllegalArgumentException("byte value out of range: " + val);
         }
@@ -70,17 +76,12 @@ public class ByteType extends DataType<Byte> implements DataTypeFactory, Streame
 
     @Override
     public int compareValueTo(Byte val1, Byte val2) {
-        return Byte.compare(val1, val2);
+        return nullSafeCompareValueTo(val1, val2, Byte::compare);
     }
 
     @Override
     public int compareTo(Object o) {
         return 0;
-    }
-
-    @Override
-    public DataType<?> create() {
-        return INSTANCE;
     }
 
     @Override
@@ -94,5 +95,10 @@ public class ByteType extends DataType<Byte> implements DataTypeFactory, Streame
         if (v != null) {
             out.writeByte(((Number) v).byteValue());
         }
+    }
+
+    @Override
+    public int fixedSize() {
+        return 16; // object overhead + 1 byte + 7 byte padding
     }
 }

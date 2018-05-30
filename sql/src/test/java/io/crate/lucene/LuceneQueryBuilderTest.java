@@ -1,81 +1,258 @@
 /*
- * Licensed to CRATE Technology GmbH ("Crate") under one or more contributor
- * license agreements.  See the NOTICE file distributed with this work for
- * additional information regarding copyright ownership.  Crate licenses
- * this file to you under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.  You may
+ * Licensed to Crate under one or more contributor license agreements.
+ * See the NOTICE file distributed with this work for additional
+ * information regarding copyright ownership.  Crate licenses this file
+ * to you under the Apache License, Version 2.0 (the "License"); you may
+ * not use this file except in compliance with the License.  You may
  * obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
- * License for the specific language governing permissions and limitations
- * under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ * implied.  See the License for the specific language governing
+ * permissions and limitations under the License.
  *
  * However, if you have executed another commercial license agreement
  * with Crate these terms will supersede the license and you may use the
- * software solely pursuant to the terms of the relevant commercial agreement.
+ * software solely pursuant to the terms of the relevant commercial
+ * agreement.
  */
 
 package io.crate.lucene;
 
-import io.crate.analyze.WhereClause;
-import io.crate.metadata.FunctionIdent;
-import io.crate.metadata.FunctionInfo;
+import com.google.common.collect.ImmutableMap;
+import io.crate.analyze.relations.AnalyzedRelation;
+import io.crate.analyze.relations.TableRelation;
+import io.crate.expression.symbol.Symbol;
 import io.crate.metadata.Functions;
-import io.crate.operation.operator.EqOperator;
-import io.crate.operation.operator.OperatorModule;
-import io.crate.planner.symbol.DataTypeSymbol;
-import io.crate.planner.symbol.Function;
-import io.crate.planner.symbol.Reference;
-import io.crate.planner.symbol.Symbol;
+import io.crate.metadata.Reference;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.Schemas;
+import io.crate.metadata.doc.DocTableInfo;
+import io.crate.metadata.table.ColumnPolicy;
+import io.crate.metadata.table.TestingTableInfo;
+import io.crate.sql.tree.QualifiedName;
+import io.crate.test.integration.CrateUnitTest;
+import io.crate.testing.IndexVersionCreated;
+import io.crate.testing.SqlExpressions;
+import io.crate.types.ArrayType;
 import io.crate.types.DataTypes;
-import org.apache.lucene.search.FilteredQuery;
+import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.search.Query;
-import org.elasticsearch.common.inject.ModulesBuilder;
+import org.elasticsearch.Version;
+import org.elasticsearch.client.Client;
+import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.common.UUIDs;
+import org.elasticsearch.common.compress.CompressedXContent;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.common.xcontent.XContentFactory;
+import org.elasticsearch.env.Environment;
+import org.elasticsearch.index.Index;
+import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.analysis.IndexAnalyzers;
 import org.elasticsearch.index.cache.IndexCache;
-import org.elasticsearch.search.internal.SearchContext;
+import org.elasticsearch.index.cache.bitset.BitsetFilterCache;
+import org.elasticsearch.index.fielddata.IndexFieldData;
+import org.elasticsearch.index.fielddata.IndexFieldDataService;
+import org.elasticsearch.index.fielddata.IndexGeoPointFieldData;
+import org.elasticsearch.index.mapper.ArrayMapper;
+import org.elasticsearch.index.mapper.ArrayTypeParser;
+import org.elasticsearch.index.mapper.Mapper;
+import org.elasticsearch.index.mapper.MapperService;
+import org.elasticsearch.index.query.QueryShardContext;
+import org.elasticsearch.index.similarity.SimilarityService;
+import org.elasticsearch.indices.IndicesModule;
+import org.elasticsearch.indices.analysis.AnalysisModule;
+import org.elasticsearch.plugins.MapperPlugin;
+import org.elasticsearch.script.ScriptService;
+import org.elasticsearch.test.IndexSettingsModule;
 import org.junit.Before;
-import org.junit.Test;
+import org.junit.Rule;
+import org.junit.rules.TemporaryFolder;
+import org.junit.rules.TestName;
 import org.mockito.Answers;
 
-import java.util.Arrays;
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.nio.file.Path;
+import java.util.Collections;
+import java.util.Map;
 
-import static io.crate.testing.TestingHelpers.createReference;
-import static org.hamcrest.Matchers.instanceOf;
-import static org.junit.Assert.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
-public class LuceneQueryBuilderTest {
+public abstract class LuceneQueryBuilderTest extends CrateUnitTest {
 
     private LuceneQueryBuilder builder;
+    private IndexCache indexCache;
+    private IndexFieldDataService indexFieldDataService;
+    private QueryShardContext queryShardContext;
+    private MapperService mapperService;
+
+    SqlExpressions expressions;
+    Map<QualifiedName, AnalyzedRelation> sources;
+
+    @Rule
+    public TemporaryFolder temporaryFolder = new TemporaryFolder();
+    @Rule
+    public TestName testName = new TestName();
 
     @Before
-    public void setUp() throws Exception {
-        Functions functions = new ModulesBuilder()
-                .add(new OperatorModule()).createInjector().getInstance(Functions.class);
-        builder = new LuceneQueryBuilder(functions,
-                mock(SearchContext.class, Answers.RETURNS_MOCKS.get()),
-                mock(IndexCache.class, Answers.RETURNS_MOCKS.get()));
+    public void prepare() throws Exception {
+        DocTableInfo users = TestingTableInfo.builder(new RelationName(Schemas.DOC_SCHEMA_NAME, "users"), null)
+            .add("name", DataTypes.STRING)
+            .add("x", DataTypes.INTEGER, null, ColumnPolicy.DYNAMIC, Reference.IndexType.NOT_ANALYZED, false, false)
+            .add("d", DataTypes.DOUBLE)
+            .add("d_array", new ArrayType(DataTypes.DOUBLE))
+            .add("y_array", new ArrayType(DataTypes.LONG))
+            .add("o_array", new ArrayType(DataTypes.OBJECT))
+            .add("ts_array", new ArrayType(DataTypes.TIMESTAMP))
+            .add("shape", DataTypes.GEO_SHAPE)
+            .add("point", DataTypes.GEO_POINT)
+            .add("ts", DataTypes.TIMESTAMP)
+            .add("addr", DataTypes.IP)
+            .build();
+        TableRelation usersTr = new TableRelation(users);
+        sources = ImmutableMap.of(new QualifiedName("users"), usersTr);
+
+        expressions = new SqlExpressions(sources, usersTr);
+        builder = new LuceneQueryBuilder(expressions.getInstance(Functions.class));
+        indexCache = mock(IndexCache.class, Answers.RETURNS_MOCKS.get());
+
+        Index index = new Index(users.ident().indexName(), UUIDs.randomBase64UUID());
+        File homeFolder = temporaryFolder.newFolder();
+        Settings nodeSettings = Settings.builder()
+            .put(IndexMetaData.SETTING_VERSION_CREATED, indexVersion())
+            .put("path.home", homeFolder.getAbsolutePath())
+            .build();
+        IndexSettings idxSettings = IndexSettingsModule.newIndexSettings(index, nodeSettings);
+        when(indexCache.getIndexSettings()).thenReturn(idxSettings);
+        IndexAnalyzers indexAnalyzers = createIndexAnalyzers(idxSettings, nodeSettings, homeFolder.toPath().resolve("config"));
+        ScriptService scriptService = mock(ScriptService.class);
+        mapperService = createMapperService(idxSettings, indexAnalyzers, scriptService);
+
+        // @formatter:off
+        XContentBuilder xContentBuilder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("default")
+                .startObject("properties")
+                    .startObject("name").field("type", "keyword").endObject()
+                    .startObject("x").field("type", "integer").endObject()
+                    .startObject("d").field("type", "double").endObject()
+                    .startObject("point").field("type", "geo_point").endObject()
+                    .startObject("shape").field("type", "geo_shape").endObject()
+                    .startObject("addr").field("type", "ip").endObject()
+                    .startObject("ts").field("type", "date").endObject()
+                    .startObject("d_array")
+                        .field("type", "array")
+                        .startObject("inner")
+                            .field("type", "double")
+                        .endObject()
+                    .endObject()
+                    .startObject("y_array")
+                        .field("type", "array")
+                        .startObject("inner")
+                            .field("type", "integer")
+                        .endObject()
+                    .endObject()
+                    .startObject("o_array")
+                        .field("type", "array")
+                        .startObject("inner")
+                            .field("type", "object")
+                        .endObject()
+                    .endObject()
+                    .startObject("ts_array")
+                        .field("type", "array")
+                        .startObject("inner")
+                            .field("type", "date")
+                        .endObject()
+                    .endObject()
+                .endObject()
+            .endObject()
+            .endObject();
+        // @formatter:on
+        mapperService.merge("default",
+            new CompressedXContent(xContentBuilder.bytes()), MapperService.MergeReason.MAPPING_UPDATE, true);
+
+        indexFieldDataService = mock(IndexFieldDataService.class);
+        IndexFieldData geoFieldData = mock(IndexGeoPointFieldData.class);
+
+        when(geoFieldData.getFieldName()).thenReturn("point");
+        when(indexFieldDataService.getForField(mapperService.fullName("point"))).thenReturn(geoFieldData);
+
+        queryShardContext = new QueryShardContext(
+            0,
+            idxSettings,
+            new BitsetFilterCache(idxSettings, mock(BitsetFilterCache.Listener.class)),
+            indexFieldDataService::getForField,
+            mapperService,
+            new SimilarityService(idxSettings, scriptService, Collections.emptyMap()),
+            scriptService,
+            xContentRegistry(),
+            writableRegistry(),
+            mock(Client.class),
+            mock(IndexReader.class),
+            System::currentTimeMillis,
+            "dummyClusterAlias"
+        );
     }
 
-    @Test
-    public void testWhereRefEqRef() throws Exception {
-        Reference foo = createReference("foo", DataTypes.STRING);
-        Query query = convert(eq(foo, foo));
-        assertThat(query, instanceOf(FilteredQuery.class));
+    private MapperService createMapperService(IndexSettings indexSettings,
+                                              IndexAnalyzers indexAnalyzers,
+                                              ScriptService scriptService) {
+        IndicesModule indicesModule = new IndicesModule(Collections.singletonList(
+            new MapperPlugin() {
+                @Override
+                public Map<String, Mapper.TypeParser> getMappers() {
+                    return Collections.singletonMap(ArrayMapper.CONTENT_TYPE, new ArrayTypeParser());
+                }
+            }));
+        return new MapperService(
+            indexSettings,
+            indexAnalyzers,
+            xContentRegistry(),
+            new SimilarityService(indexSettings, scriptService, Collections.emptyMap()),
+            indicesModule.getMapperRegistry(),
+            () -> null
+        );
     }
 
-    private Query convert(WhereClause eq) {
-        return builder.convert(eq).query;
+    private IndexAnalyzers createIndexAnalyzers(IndexSettings indexSettings, Settings nodeSettings, Path configPath) throws IOException {
+        Environment env = new Environment(nodeSettings, configPath);
+        AnalysisModule analysisModule = new AnalysisModule(env, Collections.emptyList());
+        return analysisModule.getAnalysisRegistry().build(indexSettings);
     }
 
-    private WhereClause eq(DataTypeSymbol left, DataTypeSymbol right) {
-        return new WhereClause(new Function(new FunctionInfo(
-                new FunctionIdent(EqOperator.NAME, Arrays.asList(left.valueType(), right.valueType())), DataTypes.BOOLEAN),
-                Arrays.<Symbol>asList(left, right)
-        ));
+    protected Query convert(Symbol query) {
+        return builder.convert(query, mapperService, queryShardContext, indexCache).query;
+    }
+
+    protected Query convert(String expression) {
+        return convert(expressions.normalize(expressions.asSymbol(expression)));
+    }
+
+    private Version indexVersion() {
+        try {
+            Class<?> clazz = this.getClass();
+            Method method = clazz.getMethod(testName.getMethodName());
+            IndexVersionCreated annotation = method.getAnnotation(IndexVersionCreated.class);
+            if (annotation == null) {
+                annotation = clazz.getAnnotation(IndexVersionCreated.class);
+                if (annotation == null) {
+                    return Version.CURRENT;
+                }
+            }
+            int value = annotation.value();
+            if (value == -1) {
+                return Version.CURRENT;
+            }
+            return Version.fromId(value);
+        } catch (NoSuchMethodException ignored) {
+            return Version.CURRENT;
+        }
     }
 }

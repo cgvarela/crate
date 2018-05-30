@@ -1,89 +1,83 @@
-==========
-Crate Data
-==========
+.. image:: blackbox/docs/_static/crate-logo.png
+    :alt: CrateDB
+    :target: https://crate.io/
 
-``"Crate Data is a shared nothing, fully searchable, document oriented
-cluster datastore."``
+----
 
-Crate Data...
+.. image:: https://travis-ci.org/crate/crate.svg?branch=master
+    :target: https://travis-ci.org/crate/crate
 
-- is a document oriented data store.
+.. image:: https://img.shields.io/badge/docs-latest-brightgreen.svg
+    :target: https://crate.io/docs/en/latest/
 
-- has the ability to scale horizontally extremely well.
+.. image:: https://img.shields.io/badge/container-docker-green.svg
+    :target: https://hub.docker.com/_/crate/
 
-- forms a cluster and handles replicas for you.
+|
 
-- offers SQL to query and manage documents.
+CrateDB is a distributed SQL database that makes it simple to store and analyze massive amounts of machine data in real-time.
 
-- lets you specify a schema
+Features of CrateDB:
 
-  - to define tables
+- Standard SQL plus dynamic schemas, queryable objects, geospatial features, time series data, first-class BLOB support, and realtime full-text search.
+- Horizontally scalable, highly available, and fault tolerant clusters that run very well in virtualized and containerised environments.
+- Extremely fast distributed query execution.
+- Auto-partitioning, auto-sharding, and auto-replication.
+- Self-healing and auto-rebalancing.
 
-  - and data types.
+CrateDB offers the scalability and flexibility typically associated with a NoSQL database and is designed to run on inexpensive commodity servers and can be deployed and run across any sort of network. From personal computers to multi-region hybrid clouds.
 
-- offers support to manage BLOBs.
+The smallest CrateDB clusters can easily ingest tens of thousands of records per second. And this data can be queried, ad-hoc, in parallel across the whole cluster in real time.
 
+Screenshots
+===========
 
-Getting Started
-===============
+CrateDB provides an admin UI:
 
-Installation
-------------
+.. image:: crate-admin.gif
+    :alt: Screenshots of the CrateDB admin UI
+    :target: http://play.crate.io/
 
-- Download_ the latest release and unzip the archive.
+Try CrateDB
+===========
 
-- Run ``bin/crate`` on unix or ``bin/crate.bat`` on Windows.
+The fastest way to try CrateDB out is by running::
 
-- Start the crate shell by invoking ``bin/crash``.
+    $ bash -c "$(curl -L try.crate.io)"
 
-- Start some more servers to form a cluster and relax.
+Or spin up the official `Docker image`_::
 
+    $ docker run -p 4200:4200 crate
 
-Get Crate Data
-==============
+Visit the `getting started`_ page to see all the available download and install options.
 
-Crate Data is not only easy to use, it's also easy to get. Use the one method which
-works best for you.
+Once you're up and running, head on over to `the introductory docs`_.
 
-Additional to the binary distibution via tarball, there are also distributions
-for Ubuntu/Debian, CentOS/Scientific Linux (RPM), ArchLinux and Docker.
+Contributing
+============
 
-You can find installation instructions on our website_ and documentation_.
+This project is primarily maintained by Crate.io_, but we welcome community
+contributions!
 
+See the `developer docs`_ and the `contribution docs`_ for more information.
 
-Where to go from here?
-======================
+Help
+====
 
-That is certainly not all Crate Data offers to you. To take a look at the
-documentation visit
-`https://crate.io/docs/ <https://crate.io/docs/>`_.
+Looking for more help?
 
-Managing data
--------------
+- Read `the project documentation`_
+- Check `StackOverflow`_ for common problems
+- Chat with us on `Slack`_
+- Get `paid support`_
 
-There are several different ways to manage data in Crate.
-
-- The `admin interface <http://localhost:4200/admin>`_
-
-- For for further clients in different languages see `Crate Documentation`_.
-
-.. _Crate Documentation: https://crate.io/docs/
-
-Are you a Developer?
-====================
-
-You can build Crate Data on your own with the latest version hosted on GitHub.
-To do so, please refer to ``DEVELOP.rst`` and ``CONTRIBUTING.rst`` for further
-information.
-
-Help & Contact
-==============
-
-Do you have any questions? Or suggestions? We would be very happy
-to help you. So, feel free to swing by our IRC channel #crate on Freenode_.
-Or for further information and official contact please
-visit `https://crate.io/ <https://crate.io/>`_.
-
-.. _Freenode: http://freenode.net
-.. _website: https://crate.io/download/
-.. _documentation: https://crate.io/docs/stable/installation.html
+.. _contribution docs: CONTRIBUTING.rst
+.. _Crate.io: http://crate.io/
+.. _developer docs: devs/docs/index.rst
+.. _Docker image: https://hub.docker.com/_/crate/
+.. _getting started: https://crate.io/docs/getting-started/
+.. _paid support: https://crate.io/pricing/
+.. _Slack: https://crate.io/docs/support/slackin/
+.. _StackOverflow: https://stackoverflow.com/tags/crate
+.. _the introductory docs: https://crate.io/docs/stable/hello.html
+.. _the project documentation: https://crate.io/docs/

@@ -23,23 +23,32 @@ package io.crate.types;
 
 import io.crate.Streamer;
 import io.crate.core.collections.MapComparator;
+import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.common.xcontent.NamedXContentRegistry;
+import org.elasticsearch.common.xcontent.XContentParser;
+import org.elasticsearch.common.xcontent.json.JsonXContent;
 
 import java.io.IOException;
 import java.util.Map;
 
-public class ObjectType extends DataType<Map<String,Object>>
-        implements Streamer<Map<String, Object>>, DataTypeFactory {
+public class ObjectType extends DataType<Map<String, Object>> implements Streamer<Map<String, Object>> {
 
     public static final ObjectType INSTANCE = new ObjectType();
     public static final int ID = 12;
 
-    private ObjectType() {}
+    private ObjectType() {
+    }
 
     @Override
     public int id() {
         return ID;
+    }
+
+    @Override
+    public Precedence precedence() {
+        return Precedence.ObjectType;
     }
 
     @Override
@@ -55,17 +64,25 @@ public class ObjectType extends DataType<Map<String,Object>>
     @Override
     @SuppressWarnings("unchecked")
     public Map<String, Object> value(Object value) {
-        return (Map<String, Object>)value;
+        if (value instanceof BytesRef) {
+            return mapFromBytesRef((BytesRef) value);
+        }
+        return (Map<String, Object>) value;
+    }
+
+    private static Map<String,Object> mapFromBytesRef(BytesRef value) {
+        try {
+            XContentParser parser = JsonXContent.jsonXContent.createParser(
+                NamedXContentRegistry.EMPTY, value.bytes, value.offset, value.length);
+            return parser.map();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
     public int compareValueTo(Map<String, Object> val1, Map<String, Object> val2) {
         return MapComparator.compareMaps(val1, val2);
-    }
-
-    @Override
-    public DataType<?> create() {
-        return INSTANCE;
     }
 
     // TODO: require type info from each child and then use typed streamer for contents of the map

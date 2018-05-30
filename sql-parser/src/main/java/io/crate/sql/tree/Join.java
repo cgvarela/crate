@@ -21,23 +21,20 @@
 
 package io.crate.sql.tree;
 
-import com.google.common.base.Objects;
-import com.google.common.base.Optional;
+import com.google.common.base.MoreObjects;
+
+import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 
-public class Join
-        extends Relation
-{
-    public Join(Type type, Relation left, Relation right, Optional<JoinCriteria> criteria)
-    {
+public class Join extends Relation {
+    public Join(Type type, Relation left, Relation right, Optional<JoinCriteria> criteria) {
         checkNotNull(left, "left is null");
         checkNotNull(right, "right is null");
         if (type.equals(Type.CROSS)) {
             checkArgument(!criteria.isPresent(), "Cross join cannot have join criteria");
-        }
-        else {
+        } else {
             checkArgument(criteria.isPresent(), "No join criteria specified");
         }
 
@@ -47,8 +44,7 @@ public class Join
         this.criteria = criteria;
     }
 
-    public enum Type
-    {
+    public enum Type {
         CROSS, INNER, LEFT, RIGHT, FULL
     }
 
@@ -57,47 +53,40 @@ public class Join
     private final Relation right;
     private final Optional<JoinCriteria> criteria;
 
-    public Type getType()
-    {
+    public Type getType() {
         return type;
     }
 
-    public Relation getLeft()
-    {
+    public Relation getLeft() {
         return left;
     }
 
-    public Relation getRight()
-    {
+    public Relation getRight() {
         return right;
     }
 
-    public Optional<JoinCriteria> getCriteria()
-    {
+    public Optional<JoinCriteria> getCriteria() {
         return criteria;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitJoin(this, context);
     }
 
     @Override
-    public String toString()
-    {
-        return Objects.toStringHelper(this)
-                .add("type", type)
-                .add("left", left)
-                .add("right", right)
-                .add("criteria", criteria)
-                .omitNullValues()
-                .toString();
+    public String toString() {
+        return MoreObjects.toStringHelper(this)
+            .add("type", type)
+            .add("left", left)
+            .add("right", right)
+            .add("criteria", criteria)
+            .omitNullValues()
+            .toString();
     }
 
     @Override
-    public boolean equals(Object o)
-    {
+    public boolean equals(Object o) {
         if (this == o) {
             return true;
         }
@@ -124,8 +113,7 @@ public class Join
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         int result = type != null ? type.hashCode() : 0;
         result = 31 * result + left.hashCode();
         result = 31 * result + right.hashCode();

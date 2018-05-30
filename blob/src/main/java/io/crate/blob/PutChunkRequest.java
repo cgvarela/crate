@@ -22,14 +22,14 @@
 package io.crate.blob;
 
 import io.crate.common.Hex;
-import org.elasticsearch.common.bytes.BytesArray;
+import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 import java.util.UUID;
 
-public class PutChunkRequest extends BlobTransferRequest<PutChunkRequest> implements  IPutChunkRequest {
+public class PutChunkRequest extends BlobTransferRequest<PutChunkRequest> implements IPutChunkRequest {
 
     private byte[] digest;
     private long currentPos;
@@ -38,13 +38,13 @@ public class PutChunkRequest extends BlobTransferRequest<PutChunkRequest> implem
     }
 
     public PutChunkRequest(String index, byte[] digest, UUID transferId,
-                           BytesArray content, long currentPos, boolean last) {
+                           BytesReference content, long currentPos, boolean last) {
         super(index, transferId, content, last);
         this.digest = digest;
         this.currentPos = currentPos;
     }
 
-    public String digest(){
+    public String digest() {
         return Hex.encodeHexString(digest);
     }
 

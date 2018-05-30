@@ -21,8 +21,8 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
-import com.google.common.base.Optional;
 
 import javax.annotation.Nullable;
 import java.util.List;
@@ -30,46 +30,33 @@ import java.util.List;
 public class CreateAnalyzer extends Statement {
 
     private final String ident;
-    private final Optional<String> extendedAnalyzer;
+    @Nullable
+    private final String extendedAnalyzer;
     private final List<AnalyzerElement> elements;
-    private final GenericProperties properties;
 
-    public CreateAnalyzer(String ident, @Nullable String extendedAnalyzer, List<AnalyzerElement> elements) {
+    public CreateAnalyzer(String ident,
+                          @Nullable String extendedAnalyzer,
+                          List<AnalyzerElement> elements) {
         this.ident = ident;
-        this.extendedAnalyzer = Optional.fromNullable(extendedAnalyzer);
+        this.extendedAnalyzer = extendedAnalyzer;
         this.elements = elements;
-
-        this.properties = new GenericProperties();
-        for (AnalyzerElement element : elements) {
-            if (element instanceof GenericProperty) {
-                this.properties.add((GenericProperty) element);
-            }
-        }
-
     }
 
     public String ident() {
         return ident;
     }
 
-    public Optional<String> extendedAnalyzer() {
+    @Nullable
+    public String extendedAnalyzer() {
         return extendedAnalyzer;
     }
 
     public boolean isExtending() {
-        return extendedAnalyzer.isPresent();
+        return extendedAnalyzer != null;
     }
 
     public List<AnalyzerElement> elements() {
         return elements;
-    }
-
-    /**
-     * if the statement contains any {@link io.crate.sql.tree.GenericProperty}s
-     * they will be gathered and returned as an instance of {@link io.crate.sql.tree.GenericProperties}.
-     */
-    public GenericProperties getProperties() {
-        return this.properties;
     }
 
     @Override
@@ -84,22 +71,18 @@ public class CreateAnalyzer extends Statement {
 
         CreateAnalyzer that = (CreateAnalyzer) o;
 
-        if (!elements.equals(that.elements)) return false;
-        if (!extendedAnalyzer.equals(that.extendedAnalyzer)) return false;
-        if (!ident.equals(that.ident)) return false;
-        if (!properties.equals(that.properties)) return false;
-
-        return true;
+        return Objects.equal(elements, that.elements) &&
+               Objects.equal(extendedAnalyzer, that.extendedAnalyzer) &&
+               Objects.equal(ident, that.ident);
     }
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("ident", ident)
-                .add("extends", extendedAnalyzer)
-                .add("elements", elements)
-                .add("properties", properties)
-                .toString();
+        return MoreObjects.toStringHelper(this)
+            .add("ident", ident)
+            .add("extends", extendedAnalyzer)
+            .add("elements", elements)
+            .toString();
     }
 
     @Override

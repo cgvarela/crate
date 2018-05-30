@@ -21,16 +21,24 @@
 
 package io.crate.exceptions;
 
+import io.crate.metadata.RelationName;
 import org.elasticsearch.index.shard.ShardId;
 
-public class UnavailableShardsException extends RuntimeException implements CrateException {
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Locale;
+
+public class UnavailableShardsException extends RuntimeException implements TableScopeException {
+
+    private final RelationName relationName;
 
     public UnavailableShardsException(ShardId shardId) {
         super(genMessage(shardId));
+        this.relationName = RelationName.fromIndexName(shardId.getIndexName());
     }
 
     private static String genMessage(ShardId shardId) {
-        return String.format("the shard %s of table %s is not available",
+        return String.format(Locale.ENGLISH, "the shard %s of table %s is not available",
             shardId.getId(), shardId.getIndex());
     }
 
@@ -40,7 +48,7 @@ public class UnavailableShardsException extends RuntimeException implements Crat
     }
 
     @Override
-    public Object[] args() {
-        return new Object[0];
+    public Collection<RelationName> getTableIdents() {
+        return Collections.singletonList(relationName);
     }
 }

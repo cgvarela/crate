@@ -21,181 +21,209 @@
 
 package io.crate.analyze;
 
-import com.google.common.base.Optional;
+import io.crate.analyze.expressions.ExpressionToStringVisitor;
 import io.crate.metadata.FulltextAnalyzerResolver;
-import io.crate.sql.tree.*;
-import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.settings.ImmutableSettings;
+import io.crate.sql.tree.AnalyzerElement;
+import io.crate.sql.tree.ArrayLiteral;
+import io.crate.sql.tree.CharFilters;
+import io.crate.sql.tree.CreateAnalyzer;
+import io.crate.sql.tree.DefaultTraversalVisitor;
+import io.crate.sql.tree.Expression;
+import io.crate.sql.tree.GenericProperties;
+import io.crate.sql.tree.GenericProperty;
+import io.crate.sql.tree.NamedProperties;
+import io.crate.sql.tree.Node;
+import io.crate.sql.tree.StringLiteral;
+import io.crate.sql.tree.TokenFilters;
+import io.crate.sql.tree.Tokenizer;
+import org.elasticsearch.common.settings.Settings;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-public class CreateAnalyzerStatementAnalyzer extends AbstractStatementAnalyzer<Void, CreateAnalyzerAnalysis> {
+import static io.crate.analyze.CreateAnalyzerAnalyzedStatement.getSettingsKey;
+
+
+class CreateAnalyzerStatementAnalyzer
+    extends DefaultTraversalVisitor<CreateAnalyzerAnalyzedStatement, CreateAnalyzerStatementAnalyzer.Context> {
 
     private final FulltextAnalyzerResolver fulltextAnalyzerResolver;
 
-    @Inject
-    public CreateAnalyzerStatementAnalyzer(FulltextAnalyzerResolver fulltextAnalyzerResolver) {
+    CreateAnalyzerStatementAnalyzer(FulltextAnalyzerResolver fulltextAnalyzerResolver) {
         this.fulltextAnalyzerResolver = fulltextAnalyzerResolver;
     }
 
+    public CreateAnalyzerAnalyzedStatement analyze(Node node, Analysis analysis) {
+        return super.process(node, new Context(analysis));
+    }
+
+    static class Context {
+
+        Analysis analysis;
+        CreateAnalyzerAnalyzedStatement statement;
+
+        public Context(Analysis analysis) {
+            this.analysis = analysis;
+        }
+    }
+
     @Override
-    public Void visitCreateAnalyzer(CreateAnalyzer node, CreateAnalyzerAnalysis context) {
-        context.ident(node.ident());
+    public CreateAnalyzerAnalyzedStatement visitCreateAnalyzer(CreateAnalyzer node, Context context) {
+        context.statement = new CreateAnalyzerAnalyzedStatement(fulltextAnalyzerResolver);
+        context.statement.ident(node.ident());
 
         if (node.isExtending()) {
-            context.extendedAnalyzer(node.extendedAnalyzer().get());
+            context.statement.extendedAnalyzer(node.extendedAnalyzer());
         }
 
         for (AnalyzerElement element : node.elements()) {
             process(element, context);
         }
 
-        return null;
+        return context.statement;
     }
 
     @Override
-    public Void visitTokenizer(Tokenizer tokenizer, CreateAnalyzerAnalysis context) {
+    public CreateAnalyzerAnalyzedStatement visitTokenizer(Tokenizer tokenizer, Context context) {
         String name = tokenizer.ident();
-        Optional<io.crate.sql.tree.GenericProperties> properties = tokenizer.properties();
+        GenericProperties properties = tokenizer.properties();
 
-
-        if (!properties.isPresent()) {
+        if (properties.isEmpty()) {
             // use a builtin tokenizer without parameters
 
             // validate
-            if (!context.analyzerService().hasBuiltInTokenizer(name)) {
+            if (!context.statement.analyzerService().hasBuiltInTokenizer(name)) {
                 throw new IllegalArgumentException(String.format(Locale.ENGLISH, "Non-existing tokenizer '%s'", name));
             }
             // build
-            context.tokenDefinition(name, ImmutableSettings.EMPTY);
+            context.statement.tokenDefinition(name, Settings.EMPTY);
         } else {
             // validate
-            if (!context.analyzerService().hasBuiltInTokenizer(name)) {
+            if (!context.statement.analyzerService().hasBuiltInTokenizer(name)) {
                 // type mandatory
-                String evaluatedType = extractType(properties.get(), context);
-                if (!context.analyzerService().hasBuiltInTokenizer(evaluatedType)) {
+                String evaluatedType = extractType(properties, context.analysis.parameterContext());
+                if (!context.statement.analyzerService().hasBuiltInTokenizer(evaluatedType)) {
                     // only builtin tokenizers can be extended, for now
                     throw new IllegalArgumentException(String.format(Locale.ENGLISH,
-                            "Non-existing built-in tokenizer type '%s'", evaluatedType));
+                        "Non-existing built-in tokenizer type '%s'", evaluatedType));
                 }
             } else {
                 throw new IllegalArgumentException(String.format(Locale.ENGLISH, "tokenizer name '%s' is reserved", name));
             }
             // build
             // transform name as tokenizer is not publicly available
-            name = String.format("%s_%s", context.ident(), name);
+            name = String.format(Locale.ENGLISH, "%s_%s", context.statement.ident(), name);
 
-            ImmutableSettings.Builder builder = ImmutableSettings.builder();
-            for (Map.Entry<String, Expression> tokenizerProperty : properties.get().properties().entrySet()) {
-                genericPropertyToSetting(builder,
-                        context.getSettingsKey("index.analysis.tokenizer.%s.%s", name, tokenizerProperty.getKey()),
-                        tokenizerProperty.getValue(),
-                        context);
+            Settings.Builder builder = Settings.builder();
+            for (Map.Entry<String, Expression> tokenizerProperty : properties.properties().entrySet()) {
+                GenericPropertiesConverter.genericPropertyToSetting(builder,
+                    getSettingsKey("index.analysis.tokenizer.%s.%s", name, tokenizerProperty.getKey()),
+                    tokenizerProperty.getValue(),
+                    context.analysis.parameterContext().parameters());
             }
-            context.tokenDefinition(name, builder.build());
+            context.statement.tokenDefinition(name, builder.build());
         }
-
 
         return null;
     }
 
     @Override
-    public Void visitGenericProperty(GenericProperty property, CreateAnalyzerAnalysis context) {
-        genericPropertyToSetting(context.genericAnalyzerSettingsBuilder(),
-                context.getSettingsKey("index.analysis.analyzer.%s.%s", context.ident(), property.key()),
-                property.value(),
-                context
+    public CreateAnalyzerAnalyzedStatement visitGenericProperty(GenericProperty property, Context context) {
+        GenericPropertiesConverter.genericPropertyToSetting(context.statement.genericAnalyzerSettingsBuilder(),
+            getSettingsKey("index.analysis.analyzer.%s.%s", context.statement.ident(), property.key()),
+            property.value(),
+            context.analysis.parameterContext().parameters()
         );
         return null;
     }
 
     @Override
-    public Void visitTokenFilters(TokenFilters tokenFilters, CreateAnalyzerAnalysis context) {
+    public CreateAnalyzerAnalyzedStatement visitTokenFilters(TokenFilters tokenFilters, Context context) {
         for (NamedProperties tokenFilterNode : tokenFilters.tokenFilters()) {
 
             String name = tokenFilterNode.ident();
-            Optional<GenericProperties> properties = tokenFilterNode.properties();
+            GenericProperties properties = tokenFilterNode.properties();
 
-            // use a builtin tokenfilter without parameters
-            if (!properties.isPresent()) {
+            // use a builtin token-filter without parameters
+            if (properties.isEmpty()) {
                 // validate
-                if (!context.analyzerService().hasBuiltInTokenFilter(name)) {
+                if (!context.statement.analyzerService().hasBuiltInTokenFilter(name)) {
                     throw new IllegalArgumentException(String.format(Locale.ENGLISH, "Non-existing built-in token-filter '%s'", name));
                 }
                 // build
-                context.addTokenFilter(name, ImmutableSettings.EMPTY);
+                context.statement.addTokenFilter(name, Settings.EMPTY);
             } else {
                 // validate
-                if (!context.analyzerService().hasBuiltInTokenFilter(name)) {
+                if (!context.statement.analyzerService().hasBuiltInTokenFilter(name)) {
                     // type mandatory when name is not a builtin filter
-                    String evaluatedType = extractType(properties.get(), context);
-                    if (!context.analyzerService().hasBuiltInTokenFilter(evaluatedType)) {
+                    String evaluatedType = extractType(properties, context.analysis.parameterContext());
+                    if (!context.statement.analyzerService().hasBuiltInTokenFilter(evaluatedType)) {
                         // only builtin token-filters can be extended, for now
                         throw new IllegalArgumentException(String.format(Locale.ENGLISH,
-                                "Non-existing built-in token-filter type '%s'", evaluatedType));
+                            "Non-existing built-in token-filter type '%s'", evaluatedType));
                     }
                 } else {
-                    if (properties.get().get("type") != null) {
+                    if (properties.get("type") != null) {
                         throw new IllegalArgumentException(String.format(Locale.ENGLISH,
-                                "token-filter name '%s' is reserved, 'type' property forbidden here", name));
+                            "token-filter name '%s' is reserved, 'type' property forbidden here", name));
                     }
+                    properties.add(new GenericProperty("type", new StringLiteral(name)));
                 }
 
                 // build
                 // transform name as token-filter is not publicly available
-                name = String.format("%s_%s", context.ident(), name);
-                ImmutableSettings.Builder builder = ImmutableSettings.builder();
-                for (Map.Entry<String, Expression> tokenFilterProperty : properties.get().properties().entrySet()) {
-                    genericPropertyToSetting(builder,
-                            context.getSettingsKey("index.analysis.filter.%s.%s", name, tokenFilterProperty.getKey()),
-                            tokenFilterProperty.getValue(),
-                            context);
+                name = String.format(Locale.ENGLISH, "%s_%s", context.statement.ident(), name);
+                Settings.Builder builder = Settings.builder();
+                for (Map.Entry<String, Expression> tokenFilterProperty : properties.properties().entrySet()) {
+                    GenericPropertiesConverter.genericPropertyToSetting(builder,
+                        getSettingsKey("index.analysis.filter.%s.%s", name, tokenFilterProperty.getKey()),
+                        tokenFilterProperty.getValue(),
+                        context.analysis.parameterContext().parameters());
                 }
-                context.addTokenFilter(name, builder.build());
+                context.statement.addTokenFilter(name, builder.build());
             }
         }
         return null;
     }
 
     @Override
-    public Void visitCharFilters(CharFilters charFilters, CreateAnalyzerAnalysis context) {
+    public CreateAnalyzerAnalyzedStatement visitCharFilters(CharFilters charFilters, Context context) {
         for (NamedProperties charFilterNode : charFilters.charFilters()) {
 
             String name = charFilterNode.ident();
-            Optional<GenericProperties> properties = charFilterNode.properties();
+            GenericProperties properties = charFilterNode.properties();
 
-            // use a builtin tokenfilter without parameters
-            if (!properties.isPresent()) {
+            // use a builtin char-filter without parameters
+            if (properties.isEmpty()) {
                 // validate
-                if (!context.analyzerService().hasBuiltInCharFilter(name)) {
+                if (!context.statement.analyzerService().hasBuiltInCharFilter(name)) {
                     throw new IllegalArgumentException(String.format(Locale.ENGLISH,
-                            "Non-existing built-in char-filter '%s'", name));
+                        "Non-existing built-in char-filter '%s'", name));
                 }
+                validateCharFilterProperties(name, properties);
                 // build
-                context.addCharFilter(name, ImmutableSettings.EMPTY);
+                context.statement.addCharFilter(name, Settings.EMPTY);
             } else {
-                String type = extractType(properties.get(), context);
-                if (!context.analyzerService().hasBuiltInCharFilter(type)) {
+                String type = extractType(properties, context.analysis.parameterContext());
+                if (!context.statement.analyzerService().hasBuiltInCharFilter(type)) {
                     // only builtin char-filters can be extended, for now
                     throw new IllegalArgumentException(String.format(Locale.ENGLISH,
-                            "Non-existing built-in char-filter" +
-                            " type '%s'", type));
+                        "Non-existing built-in char-filter" +
+                        " type '%s'", type));
                 }
+                validateCharFilterProperties(type, properties);
 
                 // build
                 // transform name as char-filter is not publicly available
-                name = String.format("%s_%s", context.ident(), name);
-                ImmutableSettings.Builder builder = ImmutableSettings.builder();
-                for (Map.Entry<String, Expression> charFilterProperty: properties.get().properties().entrySet()) {
-                    genericPropertyToSetting(builder,
-                            context.getSettingsKey("index.analysis.char_filter.%s.%s", name, charFilterProperty.getKey()),
-                            charFilterProperty.getValue(),
-                            context);
+                name = String.format(Locale.ENGLISH, "%s_%s", context.statement.ident(), name);
+                Settings.Builder builder = Settings.builder();
+                for (Map.Entry<String, Expression> charFilterProperty : properties.properties().entrySet()) {
+                    GenericPropertiesConverter.genericPropertyToSetting(builder,
+                        getSettingsKey("index.analysis.char_filter.%s.%s", name, charFilterProperty.getKey()),
+                        charFilterProperty.getValue(),
+                        context.analysis.parameterContext().parameters());
                 }
-                context.addCharFilter(name, builder.build());
+                context.statement.addCharFilter(name, builder.build());
             }
         }
         return null;
@@ -204,12 +232,8 @@ public class CreateAnalyzerStatementAnalyzer extends AbstractStatementAnalyzer<V
 
     /**
      * Validate and process `type` property
-     *
-     * @param properties
-     * @param context
-     * @return
      */
-    private String extractType(GenericProperties properties, CreateAnalyzerAnalysis context) {
+    private String extractType(GenericProperties properties, ParameterContext parameterContext) {
         Expression expression = properties.get("type");
         if (expression == null) {
             throw new IllegalArgumentException("'type' property missing");
@@ -218,34 +242,14 @@ public class CreateAnalyzerStatementAnalyzer extends AbstractStatementAnalyzer<V
             throw new IllegalArgumentException("'type' property is invalid");
         }
 
-        return ExpressionToStringVisitor.convert(expression, context.parameters());
+        return ExpressionToStringVisitor.convert(expression, parameterContext.parameters());
     }
 
-    /**
-     * Put a genericProperty into a settings-structure
-     *
-     * @param builder
-     * @param name
-     * @param value
-     */
-    private void genericPropertyToSetting(ImmutableSettings.Builder builder,
-                                          String name,
-                                          Expression value,
-                                          CreateAnalyzerAnalysis context) {
-        if (value instanceof ArrayLiteral) {
-            ArrayLiteral array = (ArrayLiteral)value;
-            List<String> values = new ArrayList<>(array.values().size());
-            for (Expression expression : array.values()) {
-                values.add(ExpressionToStringVisitor.convert(expression, context.parameters()));
-            }
-            builder.putArray(name, values.toArray(new String[values.size()]));
-        } else  {
-            builder.put(name, ExpressionToStringVisitor.convert(value, context.parameters()));
+    private static void validateCharFilterProperties(String type, GenericProperties properties) {
+        if (properties.isEmpty() && !type.equals("html_strip")) {
+            throw new IllegalArgumentException(String.format(Locale.ENGLISH,
+                "CHAR_FILTER of type '%s' needs additional parameters", type));
         }
     }
 
-    @Override
-    public Analysis newAnalysis(Analyzer.ParameterContext parameterContext) {
-        return new CreateAnalyzerAnalysis(fulltextAnalyzerResolver, parameterContext);
-    }
 }

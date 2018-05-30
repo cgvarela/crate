@@ -21,44 +21,46 @@
 
 package io.crate.analyze;
 
-import io.crate.metadata.ReferenceInfos;
-import io.crate.metadata.TableIdent;
-import io.crate.sql.tree.Assignment;
+import io.crate.metadata.Schemas;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.doc.DocTableInfo;
+import io.crate.metadata.table.Operation;
 import io.crate.sql.tree.RefreshStatement;
-import org.elasticsearch.common.inject.Inject;
+import io.crate.sql.tree.Table;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
-public class RefreshTableAnalyzer extends AbstractStatementAnalyzer<Void, RefreshTableAnalysis> {
+class RefreshTableAnalyzer {
 
-    private final ReferenceInfos referenceInfos;
+    private final Schemas schemas;
 
-    @Inject
-    public RefreshTableAnalyzer(ReferenceInfos referenceInfos) {
-        this.referenceInfos = referenceInfos;
+    RefreshTableAnalyzer(Schemas schemas) {
+        this.schemas = schemas;
     }
 
-    @Override
-    public Void visitRefreshStatement(RefreshStatement node, RefreshTableAnalysis context) {
-        context.table(TableIdent.of(node.table()));
-        if (!node.table().partitionProperties().isEmpty()) {
-            setParitionIdent(node.table().partitionProperties(), context);
+    public RefreshTableAnalyzedStatement analyze(RefreshStatement refreshStatement, Analysis analysis) {
+        return new RefreshTableAnalyzedStatement(getIndexNames(
+            refreshStatement.tables(),
+            schemas,
+            analysis.parameterContext(),
+            analysis.sessionContext().defaultSchema()
+        ));
+    }
+
+    private static Set<String> getIndexNames(List<Table> tables,
+                                             Schemas schemas,
+                                             ParameterContext parameterContext,
+                                             String defaultSchema) {
+        Set<String> indexNames = new HashSet<>(tables.size());
+        for (Table nodeTable : tables) {
+            DocTableInfo tableInfo = schemas.getTableInfo(
+                RelationName.of(nodeTable, defaultSchema), Operation.REFRESH);
+            indexNames.addAll(TableAnalyzer.filteredIndices(
+                    parameterContext,
+                    nodeTable.partitionProperties(), tableInfo));
         }
-
-        return null;
-    }
-
-    private void setParitionIdent(List<Assignment> properties, RefreshTableAnalysis context) {
-        String partitionIdent = PartitionPropertiesAnalyzer.toPartitionIdent(
-                context.table(),
-                properties,
-                context.parameters()
-        );
-        context.partitionIdent(partitionIdent);
-    }
-
-    @Override
-    public Analysis newAnalysis(Analyzer.ParameterContext parameterContext) {
-        return new RefreshTableAnalysis(referenceInfos, parameterContext);
+        return indexNames;
     }
 }

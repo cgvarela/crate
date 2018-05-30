@@ -21,45 +21,38 @@
 
 package io.crate.analyze;
 
-import io.crate.metadata.ReferenceInfos;
+import io.crate.data.Row;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.Schemas;
+import io.crate.metadata.blob.BlobSchemaInfo;
+import io.crate.metadata.blob.BlobTableInfo;
 import io.crate.sql.tree.AlterBlobTable;
-import io.crate.sql.tree.GenericProperties;
-import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.settings.ImmutableSettings;
-import org.elasticsearch.common.settings.Settings;
 
-public class AlterBlobTableAnalyzer extends BlobTableAnalyzer<AlterBlobTableAnalysis> {
+import static io.crate.analyze.BlobTableAnalyzer.tableToIdent;
 
-    private static final TablePropertiesAnalysis tablePropertiesAnalysis = new AlterBlobTablePropertiesAnalysis();
-    private final ReferenceInfos referenceInfos;
+class AlterBlobTableAnalyzer {
 
-    @Inject
-    public AlterBlobTableAnalyzer(ReferenceInfos referenceInfos) {
-        this.referenceInfos = referenceInfos;
+    private final Schemas schemas;
+
+    AlterBlobTableAnalyzer(Schemas schemas) {
+        this.schemas = schemas;
     }
 
-    @Override
-    public Void visitAlterBlobTable(AlterBlobTable node, AlterBlobTableAnalysis context) {
-        context.table(tableToIdent(node.table()));
-
-        if (node.genericProperties().isPresent()) {
-            GenericProperties properties = node.genericProperties().get();
-            Settings settings =
-                    tablePropertiesAnalysis.propertiesToSettings(properties, context.parameters());
-            context.indexSettingsBuilder().put(settings);
+    public AlterBlobTableAnalyzedStatement analyze(AlterBlobTable node, Row parameters) {
+        RelationName relationName = tableToIdent(node.table());
+        assert BlobSchemaInfo.NAME.equals(relationName.schema()) : "schema name must be 'blob'";
+        BlobTableInfo tableInfo = schemas.getTableInfo(relationName);
+        TableParameter tableParameter = new TableParameter();
+        if (!node.genericProperties().isEmpty()) {
+            TablePropertiesAnalyzer.analyze(
+                tableParameter,
+                tableInfo.tableParameterInfo(),
+                node.genericProperties(),
+                parameters
+            );
         } else if (!node.resetProperties().isEmpty()) {
-            ImmutableSettings.Builder builder = ImmutableSettings.builder();
-            for (String property : node.resetProperties()) {
-                builder.put(tablePropertiesAnalysis.getDefault(property));
-            }
-            context.indexSettingsBuilder().put(builder.build());
+            TablePropertiesAnalyzer.analyze(tableParameter, tableInfo.tableParameterInfo(), node.resetProperties());
         }
-
-        return null;
-    }
-
-    @Override
-    public Analysis newAnalysis(Analyzer.ParameterContext parameterContext) {
-        return new AlterBlobTableAnalysis(parameterContext, referenceInfos);
+        return new AlterBlobTableAnalyzedStatement(tableInfo, tableParameter);
     }
 }

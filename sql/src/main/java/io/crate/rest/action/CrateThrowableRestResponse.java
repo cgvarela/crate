@@ -23,67 +23,63 @@ package io.crate.rest.action;
 
 import io.crate.action.sql.SQLActionException;
 import org.elasticsearch.ElasticsearchException;
+import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.rest.*;
+import org.elasticsearch.rest.BytesRestResponse;
+import org.elasticsearch.rest.RestChannel;
+import org.elasticsearch.rest.RestRequest;
+import org.elasticsearch.rest.RestResponse;
+import org.elasticsearch.rest.RestStatus;
 
 import java.io.IOException;
 
-import static org.elasticsearch.ExceptionsHelper.detailedMessage;
+import static io.crate.exceptions.Exceptions.userFriendlyMessage;
 
 
-public class CrateThrowableRestResponse extends RestResponse {
+class CrateThrowableRestResponse extends RestResponse {
 
     private final RestStatus status;
     private final BytesReference content;
     private final String contentType;
 
-    public CrateThrowableRestResponse(RestChannel channel, Throwable t) throws IOException {
+    CrateThrowableRestResponse(RestChannel channel, Throwable t) throws IOException {
         status = (t instanceof ElasticsearchException) ?
-                ((ElasticsearchException) t).status() :
-                RestStatus.INTERNAL_SERVER_ERROR;
+            ((ElasticsearchException) t).status() :
+            RestStatus.INTERNAL_SERVER_ERROR;
         if (channel.request().method() == RestRequest.Method.HEAD) {
             this.content = BytesArray.EMPTY;
             this.contentType = BytesRestResponse.TEXT_CONTENT_TYPE;
         } else {
-            XContentBuilder builder = convert(channel, t);
+            XContentBuilder builder = convert(
+                channel.newErrorBuilder(), t, channel.request().paramAsBoolean("error_trace", false));
             this.content = builder.bytes();
-            this.contentType = builder.contentType().restContentType();
+            this.contentType = builder.contentType().mediaType();
         }
     }
 
-    private static XContentBuilder convert(RestChannel channel, Throwable t) throws IOException {
-        XContentBuilder builder = channel.newBuilder().startObject()
-            .startObject("error");
+    private static XContentBuilder convert(XContentBuilder builder, Throwable t, boolean includeErrorTrace) throws IOException {
+        int errorCode = t instanceof SQLActionException ? ((SQLActionException) t).errorCode() : 5000;
 
-        SQLActionException sqlActionException = null;
-        builder.field("message", detailedMessage(t));
-        if (t instanceof SQLActionException) {
-            sqlActionException = (SQLActionException)t;
-            builder.field("code", sqlActionException.errorCode());
-        } else {
-            builder.field("code", 5000);
+        // @formatter:off
+        builder
+            .startObject()
+                .startObject("error")
+                    .field("message", userFriendlyMessage(t))
+                    .field("code", errorCode)
+                .endObject();
+        // @formatter:on
+
+        if (includeErrorTrace) {
+            builder.field("error_trace", ExceptionsHelper.stackTrace(t));
         }
-
-        builder.endObject();
-
-        if (t != null && channel.request().paramAsBoolean("error_trace", false)
-                && sqlActionException != null) {
-            builder.field("error_trace", sqlActionException.stackTrace());
-        }
-        builder.endObject();
-        return builder;
+        return builder.endObject();
     }
 
     @Override
     public String contentType() {
         return contentType;
-    }
-
-    @Override
-    public boolean contentThreadSafe() {
-        return true;
     }
 
     @Override

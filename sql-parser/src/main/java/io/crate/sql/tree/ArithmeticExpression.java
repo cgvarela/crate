@@ -1,4 +1,4 @@
- /*
+/*
  * Licensed to CRATE Technology GmbH ("Crate") under one or more contributor
  * license agreements.  See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership.  Crate licenses
@@ -22,10 +22,8 @@
 package io.crate.sql.tree;
 
 public class ArithmeticExpression
-        extends Expression
-{
-    public enum Type
-    {
+    extends Expression {
+    public enum Type {
         ADD("+"),
         SUBTRACT("-"),
         MULTIPLY("*"),
@@ -33,13 +31,11 @@ public class ArithmeticExpression
         MODULUS("%");
         private final String value;
 
-        Type(String value)
-        {
+        Type(String value) {
             this.value = value;
         }
 
-        public String getValue()
-        {
+        public String getValue() {
             return value;
         }
     }
@@ -48,37 +44,31 @@ public class ArithmeticExpression
     private final Expression left;
     private final Expression right;
 
-    public ArithmeticExpression(Type type, Expression left, Expression right)
-    {
+    public ArithmeticExpression(Type type, Expression left, Expression right) {
         this.type = type;
         this.left = left;
         this.right = right;
     }
 
-    public Type getType()
-    {
+    public Type getType() {
         return type;
     }
 
-    public Expression getLeft()
-    {
+    public Expression getLeft() {
         return left;
     }
 
-    public Expression getRight()
-    {
+    public Expression getRight() {
         return right;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitArithmeticExpression(this, context);
     }
 
     @Override
-    public boolean equals(Object o)
-    {
+    public boolean equals(Object o) {
         if (this == o) {
             return true;
         }
@@ -102,8 +92,7 @@ public class ArithmeticExpression
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         int result = type.hashCode();
         result = 31 * result + left.hashCode();
         result = 31 * result + right.hashCode();

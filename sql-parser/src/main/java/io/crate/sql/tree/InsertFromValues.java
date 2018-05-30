@@ -21,9 +21,9 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 
-import javax.annotation.Nullable;
 import java.util.List;
 
 public class InsertFromValues extends Insert {
@@ -31,8 +31,11 @@ public class InsertFromValues extends Insert {
     private final List<ValuesList> valuesLists;
     private final int maxValuesLength;
 
-    public InsertFromValues(Table table, List<ValuesList> valuesLists, @Nullable List<String> columns) {
-        super(table, columns);
+    public InsertFromValues(Table table,
+                            List<ValuesList> valuesLists,
+                            List<String> columns,
+                            DuplicateKeyContext duplicateKeyContext) {
+        super(table, columns, duplicateKeyContext);
         this.valuesLists = valuesLists;
 
         int i = 0;
@@ -73,11 +76,11 @@ public class InsertFromValues extends Insert {
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("table", table)
-                .add("columns", columns)
-                .add("values", valuesLists)
-                .toString();
+        return MoreObjects.toStringHelper(this)
+            .add("table", table)
+            .add("columns", columns)
+            .add("values", valuesLists)
+            .toString();
     }
 
     @Override

@@ -1,0 +1,181 @@
+.. _jmx_monitoring:
+
+==============
+JMX Monitoring
+==============
+
+The JMX monitoring feature exposes query metrics via the `JMX`_ API.
+
+.. NOTE::
+
+   JMX monitoring is an :ref:`enterprise feature <enterprise_features>`.
+
+.. rubric:: Table of Contents
+
+.. contents::
+   :local:
+
+Setup
+=====
+
+Enable the Enterprise License
+-----------------------------
+
+You can enable the :ref:`conf_enterprise_license` via the CrateDB configuration
+file.
+
+Enable Collecting Stats
+-----------------------
+
+.. highlight:: psql
+
+By default, :ref:`conf_collecting_stats` is enabled.
+You can disable collecting stats via the CrateDB configuration file
+or by running this statement::
+
+  cr> SET GLOBAL "stats.enabled" = FALSE;
+
+Enable the JMX API
+------------------
+
+.. highlight:: none
+
+To monitor CrateDB using the JMX API, you must set the following system
+properties before you start CrateDB::
+
+  com.sun.management.jmxremote
+  com.sun.management.jmxremote.port=<JMX_PORT>
+  com.sun.management.jmxremote.ssl=false
+  com.sun.management.jmxremote.authenticate=false
+
+Here, ``<JMX_PORT>`` sets the port number of your JMX server. JMX SSL and
+authentication are currently not supported.
+
+More information about the JMX monitoring properties can be found in the `JMX
+documentation`_.
+
+.. highlight:: sh
+
+You can set the Java system properties with the ``-D`` option::
+
+  sh$ ./bin/crate -Dcom.sun.management.jmxremote \
+  ...             -Dcom.sun.management.jmxremote.port=7979 \
+  ...             -Dcom.sun.management.jmxremote.ssl=false \
+  ...             -Dcom.sun.management.jmxremote.authenticate=false
+
+However, the recommended way to set system properties is via the
+``CRATE_JAVA_OPTS`` environment variable, like so::
+
+  sh$ export CRATE_JAVA_OPTS="$CRATE_JAVA_OPTS \
+        -Dcom.sun.management.jmxremote \
+        -Dcom.sun.management.jmxremote.port=7979 \
+        -Dcom.sun.management.jmxremote.ssl=false \
+        -Dcom.sun.management.jmxremote.authenticate=false"
+  sh$ ./bin/crate
+
+If you're using the CrateDB Debian or RPM packages, you can set this
+environment variable via the ``/etc/default/crate`` configuration file.
+
+Using Docker
+============
+
+.. highlight:: none
+
+To enable JMX monitoring when running CrateDB in a Docker container you have to
+set the following additional Java system properties::
+
+  -Djava.rmi.server.hostname=<RMI_PORT>
+  -Dcom.sun.management.jmxremote.rmi.port=<RMI_HOSTNAME>
+
+Here, ``<RMI_HOSTNAME>`` is the IP address or hostname of the Docker host and
+``<RMI_PORT>`` is the statically assigned port of the RMI server. For
+convenience, ``<RMI_PORT>`` can be set to the same port the JMX server listens on.
+
+The ``<RMI_HOSTNAME>`` and ``<RMI_PORT>`` can be used by JMX clients (e.g.
+`JConsole`_ or `VisualVM`_) to connect to the JMX server.
+
+Here's an example Docker command::
+
+  sh> docker run -d -e CRATE_JAVA_OPTS='\
+        -Dcom.sun.management.jmxremote
+        -Dcom.sun.management.jmxremote.port=7979 \
+        -Dcom.sun.management.jmxremote.ssl=false \
+        -Dcom.sun.management.jmxremote.authenticate=false \
+        -Dcom.sun.management.jmxremote.rmi.port=<RMI_HOSTNAME> \
+        -Djava.rmi.server.hostname=7979' \
+        -p 7979:7979 crate \
+        crate -Cnetwork.host=_site_
+
+Here, again, ``<RMI_HOSTNAME>`` is the IP address or hostname of the Docker
+host.
+
+JMX Beans
+=========
+
+QueryStats MBean
+----------------
+
+The ``QueryStats`` JMX MBean exposes query frequency and average duration in
+milliseconds for ``SELECT``, ``UPDATE``, ``DELETE``, and ``INSERT`` queries.
+
+Metrics can be accessed using the JMX MBean object name
+``io.crate.monitoring:type=QueryStats`` and the following attributes:
+
+Frequency:
+
+ - ``SelectQueryFrequency``
+ - ``InsertQueryFrequency``
+ - ``UpdateQueryFrequency``
+ - ``DeleteQueryFrequency``
+ - ``OverallQueryFrequency``
+
+Average duration:
+
+ - ``SelectQueryAverageDuration``
+ - ``InsertQueryAverageDuration``
+ - ``UpdateQueryAverageDuration``
+ - ``DeleteQueryAverageDuration``
+ - ``OverallQueryAverageDuration``
+
+NodeStatus MBean
+----------------
+
+The ``NodeStatus`` JMX MBean exposes the status of the current node as boolean values.
+
+NodeStatus can be accessed using the JMX MBean object name
+``io.crate.monitoring:type=NodeStatus`` and the following attributes:
+
+ - ``Ready``
+
+   Defines if the node is able to process SQL statements.
+
+NodeInfo MBean
+--------------
+
+The ``NodeInfo`` JMX MBean exposes information about the current node;
+
+NodeInfo can be accessed using the JMX MBean object name
+``io.crate.monitoring:type=NodeInfo`` and the following attributes:
+
+ - ``NodeId``
+
+   Provides the unique identifier of the node in the cluster
+
+ - ``NodeName``
+
+   Provides the human friendly name of the node
+
+Exposing JMX via HTTP
+=====================
+
+The JMX metrics and a readiness endpoint can be exposed via HTTP (e.g. to be
+used by `Prometheus`_) by using the `Crate JMX HTTP Exporter`_ Java agent. See
+the `README`_ in the `Crate JMX HTTP Exporter`_ repository for more information.
+
+.. _Prometheus: https://prometheus.io/
+.. _README: https://github.com/crate/jmx_exporter/blob/master/README.rst
+.. _Crate JMX HTTP Exporter: https://github.com/crate/jmx_exporter
+.. _JMX: http://docs.oracle.com/javase/8/docs/technotes/guides/jmx/
+.. _JMX documentation: http://docs.oracle.com/javase/8/docs/technotes/guides/management/agent.html#gdeum
+.. _JConsole: http://docs.oracle.com/javase/8/docs/technotes/guides/management/agent.html#gdeum
+.. _VisualVM: https://visualvm.java.net/

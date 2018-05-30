@@ -21,7 +21,7 @@
 
 package io.crate.exceptions;
 
-public class UnhandledServerException extends RuntimeException implements CrateException {
+public class UnhandledServerException extends RuntimeException implements UnscopedException {
 
     public UnhandledServerException(String message) {
         super(message);
@@ -35,17 +35,8 @@ public class UnhandledServerException extends RuntimeException implements CrateE
         super(cause);
     }
 
-    public UnhandledServerException(String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
-        super(message, cause, enableSuppression, writableStackTrace);
-    }
-
     @Override
     public int errorCode() {
         return 0;
-    }
-
-    @Override
-    public Object[] args() {
-        return new Object[0];
     }
 }

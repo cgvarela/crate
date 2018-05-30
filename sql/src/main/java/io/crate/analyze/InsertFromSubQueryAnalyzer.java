@@ -21,136 +21,277 @@
 
 package io.crate.analyze;
 
-import io.crate.exceptions.UnsupportedFeatureException;
-import io.crate.metadata.FunctionInfo;
+import io.crate.analyze.expressions.ExpressionAnalysisContext;
+import io.crate.analyze.expressions.ExpressionAnalyzer;
+import io.crate.analyze.expressions.ValueNormalizer;
+import io.crate.analyze.relations.DocTableRelation;
+import io.crate.analyze.relations.ExcludedFieldProvider;
+import io.crate.analyze.relations.FieldProvider;
+import io.crate.analyze.relations.NameFieldProvider;
+import io.crate.analyze.relations.QueriedRelation;
+import io.crate.analyze.relations.RelationAnalyzer;
+import io.crate.exceptions.ColumnUnknownException;
+import io.crate.expression.eval.EvaluatingNormalizer;
+import io.crate.expression.symbol.DynamicReference;
+import io.crate.expression.symbol.Field;
+import io.crate.expression.symbol.InputColumn;
+import io.crate.expression.symbol.Symbol;
+import io.crate.expression.symbol.format.SymbolFormatter;
+import io.crate.expression.symbol.format.SymbolPrinter;
+import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.Functions;
-import io.crate.metadata.ReferenceInfos;
-import io.crate.metadata.ReferenceResolver;
-import io.crate.operation.scalar.cast.CastFunctionResolver;
-import io.crate.planner.symbol.*;
+import io.crate.metadata.Reference;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.Schemas;
+import io.crate.metadata.TransactionContext;
+import io.crate.metadata.doc.DocTableInfo;
+import io.crate.metadata.table.Operation;
+import io.crate.sql.tree.Assignment;
+import io.crate.sql.tree.Insert;
 import io.crate.sql.tree.InsertFromSubquery;
-import io.crate.sql.tree.Query;
+import io.crate.sql.tree.ParameterExpression;
 import io.crate.types.DataType;
-import org.elasticsearch.common.inject.Inject;
+import io.crate.types.DataTypes;
 
-import java.util.Arrays;
-import java.util.Iterator;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collector;
+import java.util.stream.Collectors;
 
-public class InsertFromSubQueryAnalyzer extends AbstractInsertAnalyzer<InsertFromSubQueryAnalysis> {
+import static io.crate.analyze.InsertFromValuesAnalyzer.verifyOnConflictTargets;
+import static java.util.Objects.requireNonNull;
 
+class InsertFromSubQueryAnalyzer {
 
-    private final SelectStatementAnalyzer subQueryAnalyzer;
     private final Functions functions;
-    private final ReferenceInfos referenceInfos;
-    private final ReferenceResolver globalReferenceResolver;
+    private final Schemas schemas;
+    private final RelationAnalyzer relationAnalyzer;
 
-    @Inject
-    public InsertFromSubQueryAnalyzer(SelectStatementAnalyzer selectStatementAnalyzer,
-                                      Functions functions,
-                                      ReferenceInfos referenceInfos,
-                                      ReferenceResolver globalReferenceResolver) {
-        this.subQueryAnalyzer = selectStatementAnalyzer;
-        this.functions = functions;
-        this.referenceInfos = referenceInfos;
-        this.globalReferenceResolver = globalReferenceResolver;
-    }
 
-    @Override
-    public Symbol visitInsertFromSubquery(InsertFromSubquery node, InsertFromSubQueryAnalysis context) {
-        node.table().accept(this, context); // table existence check happening here
+    private static class ValuesResolver implements ValuesAwareExpressionAnalyzer.ValuesResolver {
 
-        process(node.subQuery(), context);
+        private final DocTableRelation targetTableRelation;
+        private final List<Reference> targetColumns;
 
-        // We forbid using limit/offset or order by until we've implemented ES paging support (aka 'scroll')
-        if (context.subQueryAnalysis().isLimited() || context.subQueryAnalysis().isSorted()) {
-            throw new UnsupportedFeatureException("Using limit, offset or order by is not" +
-                    "supported on insert using a sub-query");
+        ValuesResolver(DocTableRelation targetTableRelation, List<Reference> targetColumns) {
+            this.targetTableRelation = targetTableRelation;
+            this.targetColumns = targetColumns;
         }
 
-        int numInsertColumns = node.columns().size() == 0 ? context.table().columns().size() : node.columns().size();
-        int maxInsertValues = Math.max(numInsertColumns, context.getSubQueryColumns().size());
-        handleInsertColumns(node, maxInsertValues, context);
-
-        validateMatchingColumns(node, context);
-
-        return null;
+        @Override
+        public Symbol allocateAndResolve(Field argumentColumn) {
+            Reference reference = targetTableRelation.resolveField(argumentColumn);
+            int i = targetColumns.indexOf(reference);
+            if (i < 0) {
+                throw new IllegalArgumentException(SymbolFormatter.format(
+                    "Column '%s' that is used in the VALUES() expression is not part of the target column list",
+                    argumentColumn));
+            }
+            assert reference != null : "reference must not be null";
+            return new InputColumn(i, argumentColumn.valueType());
+        }
     }
 
-    @Override
-    protected Symbol visitQuery(Query node, InsertFromSubQueryAnalysis context) {
-        return subQueryAnalyzer.visitQuery(node, context.subQueryAnalysis());
+    InsertFromSubQueryAnalyzer(Functions functions, Schemas schemas, RelationAnalyzer relationAnalyzer) {
+        this.functions = functions;
+        this.schemas = schemas;
+        this.relationAnalyzer = relationAnalyzer;
+    }
+
+    public AnalyzedInsertStatement analyze(InsertFromSubquery insert, ParamTypeHints typeHints, TransactionContext txnCtx) {
+        RelationName relationName = RelationName.of(insert.table(), txnCtx.sessionContext().defaultSchema());
+        DocTableInfo targetTable = schemas.getTableInfo(relationName, Operation.INSERT);
+        DocTableRelation tableRelation = new DocTableRelation(targetTable);
+
+        QueriedRelation subQueryRelation =
+            (QueriedRelation) relationAnalyzer.analyzeUnbound(insert.subQuery(), txnCtx, typeHints);
+
+        List<Reference> targetColumns =
+            new ArrayList<>(resolveTargetColumns(insert.columns(), targetTable, subQueryRelation.fields().size()));
+        validateColumnsAndAddCastsIfNecessary(targetColumns, subQueryRelation.outputs());
+
+        Map<Reference, Symbol> onDuplicateKeyAssignments = processUpdateAssignments(
+            tableRelation,
+            targetColumns,
+            typeHints,
+            txnCtx,
+            new NameFieldProvider(tableRelation),
+            insert.getDuplicateKeyContext()
+        );
+
+        return new AnalyzedInsertStatement(subQueryRelation, onDuplicateKeyAssignments);
+    }
+
+    public AnalyzedStatement analyze(InsertFromSubquery node, Analysis analysis) {
+        DocTableInfo tableInfo = schemas.getTableInfo(
+            RelationName.of(node.table(), analysis.sessionContext().defaultSchema()),
+            Operation.INSERT);
+
+        DocTableRelation tableRelation = new DocTableRelation(tableInfo);
+        FieldProvider fieldProvider = new NameFieldProvider(tableRelation);
+
+        QueriedRelation source = (QueriedRelation) relationAnalyzer.analyze(
+            node.subQuery(), analysis.transactionContext(), analysis.parameterContext());
+
+        List<Reference> targetColumns = new ArrayList<>(resolveTargetColumns(node.columns(), tableInfo, source.fields().size()));
+        validateColumnsAndAddCastsIfNecessary(targetColumns, source.outputs());
+
+        verifyOnConflictTargets(node.getDuplicateKeyContext(), tableInfo);
+
+        Map<Reference, Symbol> onDuplicateKeyAssignments = processUpdateAssignments(
+            tableRelation,
+            targetColumns,
+            analysis.parameterContext(),
+            analysis.transactionContext(),
+            fieldProvider,
+            node.getDuplicateKeyContext()
+        );
+
+        final boolean ignoreDuplicateKeys =
+            node.getDuplicateKeyContext().getType() == Insert.DuplicateKeyContext.Type.ON_CONFLICT_DO_NOTHING;
+
+        return new InsertFromSubQueryAnalyzedStatement(
+            source,
+            tableInfo,
+            targetColumns,
+            ignoreDuplicateKeys,
+            onDuplicateKeyAssignments);
+    }
+
+    static Collection<Reference> resolveTargetColumns(Collection<String> targetColumnNames,
+                                                      DocTableInfo targetTable,
+                                                      int numSourceColumns) {
+        if (targetColumnNames.isEmpty()) {
+            return targetColumnsFromTargetTable(targetTable, numSourceColumns);
+        }
+        LinkedHashSet<Reference> columns = new LinkedHashSet<>(targetColumnNames.size());
+        for (String targetColumnName : targetColumnNames) {
+            ColumnIdent columnIdent = ColumnIdent.fromPath(targetColumnName);
+            Reference reference = targetTable.getReference(columnIdent);
+            Reference targetReference;
+            if (reference == null) {
+                DynamicReference dynamicReference = targetTable.getDynamic(columnIdent, true);
+                if (dynamicReference == null) {
+                    throw new ColumnUnknownException(targetColumnName, targetTable.ident());
+                }
+                targetReference = dynamicReference;
+            } else {
+                targetReference = reference;
+            }
+            if (!columns.add(targetReference)) {
+                throw new IllegalArgumentException(String.format(Locale.ENGLISH, "reference '%s' repeated", targetColumnName));
+            }
+        }
+        return columns;
+    }
+
+
+    private static Collection<Reference> targetColumnsFromTargetTable(DocTableInfo targetTable, int numSourceColumns) {
+        List<Reference> columns = new ArrayList<>(targetTable.columns().size());
+        int idx = 0;
+        for (Reference reference : targetTable.columns()) {
+            if (idx > numSourceColumns) {
+                break;
+            }
+            columns.add(reference);
+            idx++;
+        }
+        return columns;
     }
 
     /**
      * validate that result columns from subquery match explicit insert columns
      * or complete table schema
-     * @param node
-     * @param context
      */
-    private void validateMatchingColumns(InsertFromSubquery node, InsertFromSubQueryAnalysis context) {
-        List<Reference> insertColumns = context.columns();
-        List<Symbol> subQueryColumns = context.getSubQueryColumns();
-
-        if (insertColumns.size() != subQueryColumns.size()) {
-            throw new IllegalArgumentException("Number of columns in insert statement and subquery differ");
+    private static void validateColumnsAndAddCastsIfNecessary(List<Reference> targetColumns,
+                                                              List<Symbol> sources) {
+        if (targetColumns.size() != sources.size()) {
+            Collector<CharSequence, ?, String> commaJoiner = Collectors.joining(", ");
+            throw new IllegalArgumentException(String.format(Locale.ENGLISH,
+                "Number of target columns (%s) of insert statement doesn't match number of source columns (%s)",
+                targetColumns.stream().map(r -> r.column().sqlFqn()).collect(commaJoiner),
+                sources.stream().map(SymbolPrinter.INSTANCE::printUnqualified).collect(commaJoiner)));
         }
 
-        Iterator<Reference> insertColumnsIter = insertColumns.iterator();
-        Iterator<Symbol> subQueryColumnsIter = subQueryColumns.iterator();
-        Reference insertColumn;
-        Symbol subQueryColumn;
-        int idx = 0;
-        while (insertColumnsIter.hasNext()) {
-
-            insertColumn = insertColumnsIter.next();
-            subQueryColumn = subQueryColumnsIter.next();
-
-            if (!(subQueryColumn instanceof DataTypeSymbol)) {
-                throw new IllegalArgumentException(
-                        SymbolFormatter.format("Invalid column expression in subquery: '%s'", subQueryColumn)
-                );
+        for (int i = 0; i < targetColumns.size(); i++) {
+            Reference targetCol = targetColumns.get(i);
+            Symbol source = sources.get(i);
+            DataType targetType = targetCol.valueType();
+            if (targetType.id() == DataTypes.UNDEFINED.id() || source.valueType().isConvertableTo(targetType)) {
+                continue;
             }
-            DataType subQueryColumnType = ((DataTypeSymbol) subQueryColumn).valueType();
-
-            if (subQueryColumnType != insertColumn.valueType()) {
-                if (!subQueryColumnType.isConvertableTo(insertColumn.valueType())) {
-                    throw new IllegalArgumentException(
-                            String.format(Locale.ENGLISH,
-                                    "Type of subquery column %s (%s) does not match /" +
-                                            " is not convertable to the type of table column %s (%s)",
-                                    SymbolFormatter.format(subQueryColumn),
-                                    ((DataTypeSymbol) subQueryColumn).valueType(),
-                                    insertColumn.info().ident().columnIdent().fqn(),
-                                    insertColumn.valueType()
-                            ));
-                } else {
-                    // replace column by `toX` function
-                    FunctionInfo functionInfo = CastFunctionResolver.functionInfo(subQueryColumnType, insertColumn.valueType());
-                    Function function = context.allocateFunction(functionInfo, Arrays.asList(subQueryColumn));
-                    if (context.subQueryAnalysis().hasGroupBy()) {
-                        int groupByIdx = context.subQueryAnalysis().groupBy().indexOf(subQueryColumn);
-                        if (groupByIdx != -1) {
-                            context.subQueryAnalysis().groupBy().set(groupByIdx, function);
-                        }
-                    }
-                    if (context.subQueryAnalysis().sortSymbols() != null) {
-                        int sortSymbolIdx = context.subQueryAnalysis().sortSymbols().indexOf(subQueryColumn);
-                        if (sortSymbolIdx != -1) {
-                            context.subQueryAnalysis().sortSymbols().set(sortSymbolIdx, function);
-                        }
-                    }
-                    subQueryColumns.set(idx, function);
-                }
-            }
-            idx++;
+            throw new IllegalArgumentException(String.format(Locale.ENGLISH,
+                "Type of subquery column %s (%s) does not match is not convertable to the type of table column %s (%s)",
+                source,
+                source.valueType(),
+                targetCol.column().fqn(),
+                targetType
+            ));
         }
-        // congrats! valid statement
     }
 
-    @Override
-    public Analysis newAnalysis(Analyzer.ParameterContext parameterContext) {
-        return new InsertFromSubQueryAnalysis(referenceInfos, functions, parameterContext, globalReferenceResolver);
+    static Map<Reference, Symbol> getUpdateAssignments(Functions functions,
+                                                       DocTableRelation targetTable,
+                                                       List<Reference> targetCols,
+                                                       ExpressionAnalyzer exprAnalyzer,
+                                                       TransactionContext txnCtx,
+                                                       Function<ParameterExpression, Symbol> paramConverter,
+                                                       Insert.DuplicateKeyContext duplicateKeyContext) {
+        if (duplicateKeyContext.getAssignments().isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        ExpressionAnalysisContext exprCtx = new ExpressionAnalysisContext();
+        ValuesResolver valuesResolver = new ValuesResolver(targetTable, targetCols);
+        final FieldProvider fieldProvider;
+        if (duplicateKeyContext.getType() == Insert.DuplicateKeyContext.Type.ON_CONFLICT_DO_UPDATE_SET) {
+            fieldProvider = new ExcludedFieldProvider(new NameFieldProvider(targetTable), valuesResolver);
+        } else {
+            fieldProvider = new NameFieldProvider(targetTable);
+        }
+        ValuesAwareExpressionAnalyzer valuesAwareExpressionAnalyzer = new ValuesAwareExpressionAnalyzer(
+            functions, txnCtx, paramConverter, fieldProvider, valuesResolver, duplicateKeyContext.getType());
+        EvaluatingNormalizer normalizer = new EvaluatingNormalizer(functions, RowGranularity.CLUSTER, null, targetTable);
+
+        Map<Reference, Symbol> updateAssignments = new HashMap<>(duplicateKeyContext.getAssignments().size());
+        for (Assignment assignment : duplicateKeyContext.getAssignments()) {
+            Reference targetCol = requireNonNull(
+                targetTable.resolveField((Field) exprAnalyzer.convert(assignment.columnName(), exprCtx)),
+                "resolveField must work on a field that was just resolved"
+            );
+
+            Symbol valueSymbol = ValueNormalizer.normalizeInputForReference(
+                normalizer.normalize(valuesAwareExpressionAnalyzer.convert(assignment.expression(), exprCtx), txnCtx),
+                targetCol,
+                targetTable.tableInfo()
+            );
+            updateAssignments.put(targetCol, valueSymbol);
+        }
+        return updateAssignments;
+    }
+
+    private Map<Reference, Symbol> processUpdateAssignments(DocTableRelation tableRelation,
+                                                            List<Reference> targetColumns,
+                                                            java.util.function.Function<ParameterExpression, Symbol> parameterContext,
+                                                            TransactionContext transactionContext,
+                                                            FieldProvider fieldProvider,
+                                                            Insert.DuplicateKeyContext duplicateKeyContext) {
+        if (duplicateKeyContext.getAssignments().isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        ExpressionAnalyzer expressionAnalyzer = new ExpressionAnalyzer(
+            functions, transactionContext, parameterContext, fieldProvider, null, Operation.UPDATE);
+
+        return getUpdateAssignments(functions, tableRelation, targetColumns, expressionAnalyzer,
+            transactionContext, parameterContext, duplicateKeyContext);
     }
 }

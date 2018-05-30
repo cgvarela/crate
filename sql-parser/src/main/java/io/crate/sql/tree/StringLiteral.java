@@ -22,43 +22,27 @@
 package io.crate.sql.tree;
 
 import com.google.common.base.Preconditions;
-import io.airlift.slice.Slice;
-import io.airlift.slice.Slices;
-
-import static com.google.common.base.Charsets.UTF_8;
 
 public class StringLiteral
-        extends Literal
-{
+    extends Literal {
     private final String value;
-    private final Slice slice;
 
-    public StringLiteral(String value)
-    {
+    public StringLiteral(String value) {
         Preconditions.checkNotNull(value, "value is null");
         this.value = value;
-        this.slice = Slices.wrappedBuffer(value.getBytes(UTF_8));
     }
 
-    public String getValue()
-    {
+    public String getValue() {
         return value;
     }
 
-    public Slice getSlice()
-    {
-        return slice;
-    }
-
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
-    {
+    public <R, C> R accept(AstVisitor<R, C> visitor, C context) {
         return visitor.visitStringLiteral(this, context);
     }
 
     @Override
-    public boolean equals(Object o)
-    {
+    public boolean equals(Object o) {
         if (this == o) {
             return true;
         }
@@ -76,8 +60,7 @@ public class StringLiteral
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return value.hashCode();
     }
 }

@@ -24,6 +24,8 @@ package io.crate.action.sql;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.rest.RestStatus;
 
+import java.util.List;
+
 /**
  * This exception must be the only one which is thrown by our <code>TransportSQLAction</code>,
  * all internal exceptions must be transformed to this one.
@@ -36,57 +38,55 @@ import org.elasticsearch.rest.RestStatus;
  */
 public class SQLActionException extends ElasticsearchException {
 
-    private final int errorCode;
+    private static final String ERROR_CODE_KEY = "cr.ec";
+
     private final RestStatus status;
-    private final String stackTrace;
+
+    public SQLActionException(String message, int errorCode, RestStatus status) {
+        super(message);
+        this.status = status;
+        addHeader(ERROR_CODE_KEY, Integer.toString(errorCode));
+    }
 
     /**
      * Construct a <code>SQLActionException</code> with the specified message, error code,
-     * rest status code and the already to string printed stack trace.
+     * rest status code stack trace elements.
      *
-     * @param message       the detailed message
-     * @param errorCode     an error code
-     * @param status        a rest status code
-     * @param stackTrace    stack trace as string value
+     * @param message            the detailed message
+     * @param errorCode          the crate error code
+     * @param status             the rest status
+     * @param stackTraceElements the stacktrace as array
      */
-    public SQLActionException(String message, int errorCode, RestStatus status,
-                              String stackTrace) {
-        super(message);
-        this.errorCode = errorCode;
-        this.status = status;
-        this.stackTrace = stackTrace;
+    public SQLActionException(String message, int errorCode, RestStatus status, StackTraceElement[] stackTraceElements) {
+        this(message, errorCode, status);
+        assert stackTraceElements != null : "stackTraceElements must not be null";
+        setStackTrace(stackTraceElements);
     }
 
     /**
      * Return the rest status code defined on construction
-     *
      */
     public RestStatus status() {
         return status;
     }
 
-    /**
-     * Return the error code given defined on construction
-     *
-     */
-    public int errorCode() {
-        return errorCode;
-    }
 
     /**
-     * Return the stack trace as string.
-     *
+     * Return the error code given defined on construction
      */
-    public String stackTrace() {
-        return stackTrace;
+    public int errorCode() {
+        List<String> errorCodeHeader = getHeader(ERROR_CODE_KEY);
+        assert errorCodeHeader != null : "errorCodeHeader must not be null";
+        return Integer.parseInt(errorCodeHeader.get(0));
+    }
+
+    @Override
+    public String getDetailedMessage() {
+        return status + " " + errorCode() + " " + super.getMessage();
     }
 
     @Override
     public String toString() {
-        return "SQLActionException{" +
-                "errorCode=" + errorCode +
-                ", status=" + status +
-                ", stackTrace='" + stackTrace + '\'' +
-                '}';
+        return "SQLActionException: " + getDetailedMessage();
     }
 }

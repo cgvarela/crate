@@ -21,135 +21,120 @@
 
 package io.crate.udc.ping;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
-import io.crate.ClusterIdService;
+import com.google.common.collect.ImmutableMap;
 import io.crate.Version;
-import org.elasticsearch.cluster.ClusterService;
+import io.crate.monitor.ExtendedNodeInfo;
+import io.crate.settings.SharedSettings;
+import org.apache.logging.log4j.Logger;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.logging.ESLogger;
 import org.elasticsearch.common.logging.Loggers;
-import org.elasticsearch.common.transport.InetSocketTransportAddress;
-import org.elasticsearch.common.transport.TransportAddress;
+import org.elasticsearch.common.settings.ClusterSettings;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.XContentFactory;
-import org.elasticsearch.http.HttpServerTransport;
-import org.hyperic.sigar.OperatingSystem;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.*;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
-import java.util.*;
-import java.util.concurrent.ExecutionException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.TimerTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class PingTask extends TimerTask {
 
-    public static TimeValue HTTP_TIMEOUT = new TimeValue(5, TimeUnit.SECONDS);
-
-    private ESLogger logger = Loggers.getLogger(this.getClass());
+    private static final TimeValue HTTP_TIMEOUT = new TimeValue(5, TimeUnit.SECONDS);
+    private static final Logger logger = Loggers.getLogger(PingTask.class);
 
     private final ClusterService clusterService;
-    private final ClusterIdService clusterIdService;
-    private final HttpServerTransport httpServerTransport;
+    private final ExtendedNodeInfo extendedNodeInfo;
     private final String pingUrl;
+    private final Settings settings;
+    private String licenseIdent;
 
     private AtomicLong successCounter = new AtomicLong(0);
     private AtomicLong failCounter = new AtomicLong(0);
 
     public PingTask(ClusterService clusterService,
-                    ClusterIdService clusterIdService,
-                    HttpServerTransport httpServerTransport,
-                    String pingUrl) {
+                    ExtendedNodeInfo extendedNodeInfo,
+                    String pingUrl,
+                    ClusterSettings clusterSettings,
+                    Settings settings) {
         this.clusterService = clusterService;
-        this.clusterIdService = clusterIdService;
-        this.httpServerTransport = httpServerTransport;
         this.pingUrl = pingUrl;
+        this.settings = settings;
+        this.licenseIdent = SharedSettings.LICENSE_IDENT_SETTING.setting().get(settings);
+        this.extendedNodeInfo = extendedNodeInfo;
+        clusterSettings.addSettingsUpdateConsumer(SharedSettings.LICENSE_IDENT_SETTING.setting(), this::setLicenseIdent);
     }
 
-    @SuppressWarnings("unchecked")
-    public Map<String, Object> getKernelData() {
-        return OperatingSystem.getInstance().toMap();
+    private Map<String, String> getKernelData() {
+        return extendedNodeInfo.osInfo().kernelData();
     }
 
-    public @Nullable String getClusterId() {
-        // wait until clusterId is available (master has been elected)
-        try {
-            return clusterIdService.clusterId().get().value().toString();
-        } catch (InterruptedException|ExecutionException e) {
-            if (logger.isTraceEnabled()) {
-                logger.trace("Error getting cluster id", e);
-            }
-            return null;
-        }
+    private String getClusterId() {
+        return clusterService.state().metaData().clusterUUID();
     }
 
-    public Boolean isMasterNode() {
+    private Boolean isMasterNode() {
         return clusterService.localNode().isMasterNode();
     }
 
-    public Map<String, Object> getCounters() {
-        return new HashMap<String, Object>() {{
-            put("success", successCounter.get());
-            put("failure", failCounter.get());
-        }};
+    @VisibleForTesting
+    String isEnterprise() {
+        return SharedSettings.ENTERPRISE_LICENSE_SETTING.setting().getRaw(settings);
     }
 
-    public String getHardwareAddress() {
-        TransportAddress transportAddress = httpServerTransport.boundAddress().publishAddress();
-        if (!(transportAddress instanceof InetSocketTransportAddress)) {
-            return null;
-        }
-
-        String hardwareAddress = null;
-        InetAddress inetAddress = ((InetSocketTransportAddress) transportAddress).address().getAddress();
-        try {
-            NetworkInterface networkInterface = NetworkInterface.getByInetAddress(inetAddress);
-            if (networkInterface != null) {
-                if (networkInterface.getName().equals("lo")) {
-                    hardwareAddress = "loopback device";
-                } else {
-                    byte[] hardwareAddressBytes = networkInterface.getHardwareAddress();
-                    StringBuilder sb = new StringBuilder(18);
-                    for (byte b : hardwareAddressBytes) {
-                        if (sb.length() > 0)
-                            sb.append(':');
-                        sb.append(String.format("%02x", b));
-                    }
-                    hardwareAddress = sb.toString();
-                }
-            }
-
-        } catch (SocketException e) {
-            if (logger.isTraceEnabled()) {
-                logger.trace("Error getting network interface", e);
-            }
-        }
-        return hardwareAddress;
+    @VisibleForTesting
+    String getLicenseIdent() {
+        return licenseIdent;
     }
 
-    public String getCrateVersion() {
-        return Version.CURRENT.number();
+    private void setLicenseIdent(String licenseIdent) {
+        this.licenseIdent = licenseIdent;
     }
 
-    public String getJavaVersion() {
-        return System.getProperty("java.version");
+    private Map<String, Object> getCounters() {
+        return ImmutableMap.of(
+            "success", successCounter.get(),
+            "failure", failCounter.get()
+        );
+    }
+
+    @Nullable
+    @VisibleForTesting
+    String getHardwareAddress() {
+        String macAddress = extendedNodeInfo.networkInfo().primaryInterface().macAddress();
+        return macAddress.equals("") ? null : macAddress;
     }
 
     private URL buildPingUrl() throws URISyntaxException, IOException, NoSuchAlgorithmException {
 
-        URI uri = new URI(this.pingUrl);
+        final URI uri = new URI(this.pingUrl);
 
-        Map<String, String> queryMap = new HashMap<>();
-        queryMap.put("cluster_id", getClusterId()); // block until clusterId is available
+        Map<String, String> queryMap = new HashMap<>(9);
+        queryMap.put("cluster_id", getClusterId());
         queryMap.put("kernel", XContentFactory.jsonBuilder().map(getKernelData()).string());
         queryMap.put("master", isMasterNode().toString());
+        queryMap.put("enterprise", isEnterprise());
         queryMap.put("ping_count", XContentFactory.jsonBuilder().map(getCounters()).string());
         queryMap.put("hardware_address", getHardwareAddress());
-        queryMap.put("crate_version", getCrateVersion());
-        queryMap.put("java_version", getJavaVersion());
+        queryMap.put("crate_version", Version.CURRENT.number());
+        queryMap.put("java_version", System.getProperty("java.version"));
+        queryMap.put("license_ident", getLicenseIdent());
 
         if (logger.isDebugEnabled()) {
             logger.debug("Sending data: {}", queryMap);
@@ -165,8 +150,8 @@ public class PingTask extends TimerTask {
         String query = Joiner.on('&').join(params);
 
         return new URI(
-                uri.getScheme(), uri.getUserInfo(), uri.getHost(), uri.getPort(),
-                uri.getPath(), query, uri.getFragment()
+            uri.getScheme(), uri.getUserInfo(), uri.getHost(), uri.getPort(),
+            uri.getPath(), query, uri.getFragment()
         ).toURL();
     }
 
@@ -177,15 +162,15 @@ public class PingTask extends TimerTask {
             if (logger.isDebugEnabled()) {
                 logger.debug("Sending UDC information to {}...", url);
             }
-            HttpURLConnection conn = (HttpURLConnection)url.openConnection();
-            conn.setConnectTimeout((int)HTTP_TIMEOUT.millis());
-            conn.setReadTimeout((int)HTTP_TIMEOUT.millis());
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout((int) HTTP_TIMEOUT.millis());
+            conn.setReadTimeout((int) HTTP_TIMEOUT.millis());
 
             if (conn.getResponseCode() >= 300) {
-                throw new Exception(String.format("%s Responded with Code %d", url.getHost(), conn.getResponseCode()));
+                throw new Exception(String.format(Locale.ENGLISH, "%s Responded with Code %d", url.getHost(), conn.getResponseCode()));
             }
             if (logger.isDebugEnabled()) {
-                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
                 String line = reader.readLine();
                 while (line != null) {
                     logger.debug(line);

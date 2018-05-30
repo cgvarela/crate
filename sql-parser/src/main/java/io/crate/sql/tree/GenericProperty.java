@@ -21,10 +21,10 @@
 
 package io.crate.sql.tree;
 
+import com.google.common.base.MoreObjects;
 import com.google.common.base.Objects;
 
 /**
- *
  * A key-value entry mapping a string to a list of <code>Expression</code>s.
  * A <code>GenericProperty</code> always belongs to {@link io.crate.sql.tree.GenericProperties}.
  * <p>
@@ -73,10 +73,10 @@ public class GenericProperty extends AnalyzerElement {
 
     @Override
     public String toString() {
-        return Objects.toStringHelper(this)
-                .add("key", key)
-                .add("value", value)
-                .toString();
+        return MoreObjects.toStringHelper(this)
+            .add("key", key)
+            .add("value", value)
+            .toString();
     }
 
     @Override

@@ -30,24 +30,21 @@ import java.util.List;
 
 public class SubscriptContext {
 
-    private final Analyzer.ParameterContext parameterContext;
-
     private QualifiedName qName;
 
     private Expression expression;
 
-    private List<String> parts = new ArrayList<>();
-    private Integer index;
+    private final List<String> parts = new ArrayList<>();
+    private Expression index;
 
-    public SubscriptContext(Analyzer.ParameterContext parameterContext) {
-        this.parameterContext = parameterContext;
+    public SubscriptContext() {
     }
 
-    public QualifiedName qName() {
+    public QualifiedName qualifiedName() {
         return qName;
     }
 
-    public void qName(QualifiedName qName) {
+    public void qualifiedName(QualifiedName qName) {
         this.qName = qName;
     }
 
@@ -59,12 +56,12 @@ public class SubscriptContext {
         parts.add(0, part);
     }
 
-    public void index(Integer index) {
+    public void index(Expression index) {
         this.index = index;
     }
 
     @Nullable
-    public Integer index() {
+    public Expression index() {
         return index;
     }
 
@@ -77,7 +74,4 @@ public class SubscriptContext {
         this.expression = expression;
     }
 
-    public Analyzer.ParameterContext parameterContext() {
-        return parameterContext;
-    }
 }

@@ -21,70 +21,118 @@
 
 package io.crate.analyze;
 
-import io.crate.PartitionName;
-import io.crate.metadata.ReferenceInfos;
-import io.crate.metadata.TableIdent;
+import io.crate.action.sql.SessionContext;
+import io.crate.data.Row;
+import io.crate.metadata.PartitionName;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.Schemas;
+import io.crate.metadata.doc.DocTableInfo;
+import io.crate.metadata.table.Operation;
 import io.crate.sql.tree.AlterTable;
-import io.crate.sql.tree.ColumnDefinition;
-import io.crate.sql.tree.GenericProperties;
+import io.crate.sql.tree.AlterTableRename;
+import io.crate.sql.tree.Assignment;
 import io.crate.sql.tree.Table;
-import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.settings.ImmutableSettings;
+import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.common.settings.Settings;
 
-public class AlterTableAnalyzer extends AbstractStatementAnalyzer<Void, AlterTableAnalysis> {
+import javax.annotation.Nullable;
+import java.util.List;
 
-    private static final TablePropertiesAnalysis tablePropertiesAnalysis = new TablePropertiesAnalysis();
-    private final ReferenceInfos referenceInfos;
+public class AlterTableAnalyzer {
 
-    @Inject
-    public AlterTableAnalyzer(ReferenceInfos referenceInfos) {
-        this.referenceInfos = referenceInfos;
+    private final Schemas schemas;
+
+    AlterTableAnalyzer(Schemas schemas) {
+        this.schemas = schemas;
     }
 
-    @Override
-    public Void visitColumnDefinition(ColumnDefinition node, AlterTableAnalysis context) {
-        if (node.ident().startsWith("_")) {
-            throw new IllegalArgumentException("Column ident must not start with '_'");
+    public AlterTableAnalyzedStatement analyze(AlterTable node, Row parameters, SessionContext sessionContext) {
+        Table table = node.table();
+        DocTableInfo docTableInfo = schemas.getTableInfo(RelationName.of(table, sessionContext.defaultSchema()),
+            Operation.ALTER_BLOCKS);
+        PartitionName partitionName = createPartitionName(table.partitionProperties(), docTableInfo, parameters);
+        TableParameterInfo tableParameterInfo = getTableParameterInfo(table, docTableInfo, partitionName);
+        TableParameter tableParameter = getTableParameter(node, parameters, tableParameterInfo);
+        maybeRaiseBlockedException(docTableInfo, tableParameter.settings());
+        return new AlterTableAnalyzedStatement(docTableInfo, partitionName, tableParameter, table.excludePartitions());
+    }
+
+    AlterTableRenameAnalyzedStatement analyzeRename(AlterTableRename node, SessionContext sessionContext) {
+        if (!node.table().partitionProperties().isEmpty()) {
+            throw new UnsupportedOperationException("Renaming a single partition is not supported");
         }
 
-        return null;
+        // we do not support renaming to a different schema, thus the target table identifier must not include a schema
+        // this is an artificial limitation, technically it can be done
+        List<String> newIdentParts = node.newName().getParts();
+        if (newIdentParts.size() > 1) {
+            throw new IllegalArgumentException("Target table name must not include a schema");
+        }
+
+        RelationName relationName = RelationName.of(node.table(), sessionContext.defaultSchema());
+        DocTableInfo tableInfo = schemas.getTableInfo(relationName);
+        RelationName newRelationName = new RelationName(relationName.schema(), newIdentParts.get(0));
+        newRelationName.ensureValidForRelationCreation();
+        return new AlterTableRenameAnalyzedStatement(tableInfo, newRelationName);
     }
 
-    @Override
-    public Void visitAlterTable(AlterTable node, AlterTableAnalysis context) {
-        setTableAndPartitionName(node.table(), context);
+    private static TableParameterInfo getTableParameterInfo(Table table,
+                                                            DocTableInfo tableInfo,
+                                                            @Nullable PartitionName partitionName) {
+        TableParameterInfo tableParameterInfo = tableInfo.tableParameterInfo();
+        if (partitionName == null) {
+            return tableParameterInfo;
+        }
+        assert tableParameterInfo instanceof PartitionedTableParameterInfo :
+            "tableParameterInfo must be " + PartitionedTableParameterInfo.class.getSimpleName();
+        assert !table.excludePartitions() : "Alter table ONLY not supported when using a partition";
+        return ((PartitionedTableParameterInfo) tableParameterInfo).partitionTableSettingsInfo();
+    }
 
-        if (node.genericProperties().isPresent()) {
-            GenericProperties properties = node.genericProperties().get();
-            context.settings(
-                    tablePropertiesAnalysis.propertiesToSettings(properties, context.parameters()));
+    private static TableParameter getTableParameter(AlterTable node, Row parameters, TableParameterInfo tableParameterInfo) {
+        TableParameter tableParameter = new TableParameter();
+        if (!node.genericProperties().isEmpty()) {
+            TablePropertiesAnalyzer.analyze(tableParameter, tableParameterInfo, node.genericProperties(), parameters);
         } else if (!node.resetProperties().isEmpty()) {
-            ImmutableSettings.Builder builder = ImmutableSettings.builder();
-            for (String property : node.resetProperties()) {
-                builder.put(tablePropertiesAnalysis.getDefault(property));
-            }
-            context.settings(builder.build());
+            TablePropertiesAnalyzer.analyze(tableParameter, tableParameterInfo, node.resetProperties());
         }
-
-        return null;
+        return tableParameter;
     }
 
-    private void setTableAndPartitionName(Table node, AlterTableAnalysis context) {
-        context.table(TableIdent.of(node));
-        if (!node.partitionProperties().isEmpty()) {
-            PartitionName partitionName = PartitionPropertiesAnalyzer.toPartitionName(
-                    context.table(),
-                    node.partitionProperties(),
-                    context.parameters());
-            if (!context.table().partitions().contains(partitionName)) {
-                throw new IllegalArgumentException("Referenced partition does not exist.");
-            }
-            context.partitionName(partitionName);
+    // Only check for permission if statement is not changing the metadata blocks, so don't block `re-enabling` these.
+    private static void maybeRaiseBlockedException(DocTableInfo tableInfo, Settings tableSettings) {
+        if (tableSettings.size() != 1 ||
+            (tableSettings.get(IndexMetaData.SETTING_BLOCKS_METADATA) == null &&
+             tableSettings.get(IndexMetaData.SETTING_READ_ONLY) == null)) {
+
+            Operation.blockedRaiseException(tableInfo, Operation.ALTER);
         }
     }
 
-    @Override
-    public Analysis newAnalysis(Analyzer.ParameterContext parameterContext) {
-        return new AlterTableAnalysis(parameterContext, referenceInfos);
+    /**
+     * Creates and returns a PartitionName based on a list of partition properties, table info and row params from
+     * the query. Used so that the analyzer/operation can determine the partition supplied with the query.
+     *
+     * @param partitionsProperties A list of partition property assignments
+     * @param tableInfo The table info of the relevant table
+     * @param parameters The parameters supplied with the query
+     * @return An instance of PartitionName based on the supplied partition properties, table info and params.
+     */
+    @Nullable
+    public static PartitionName createPartitionName(List<Assignment> partitionsProperties,
+                                                    DocTableInfo tableInfo,
+                                                    Row parameters) {
+        if (partitionsProperties.isEmpty()) {
+            return null;
+        }
+        PartitionName partitionName = PartitionPropertiesAnalyzer.toPartitionName(
+            tableInfo,
+            partitionsProperties,
+            parameters
+        );
+        if (tableInfo.partitions().contains(partitionName) == false) {
+            throw new IllegalArgumentException("Referenced partition \"" + partitionName + "\" does not exist.");
+        }
+        return partitionName;
     }
 }

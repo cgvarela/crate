@@ -26,13 +26,9 @@ import org.elasticsearch.ElasticsearchException;
 /**
  * An exception thrown if the XContent source of a request cannot be parsed.
  */
-public class SQLParseSourceException extends ElasticsearchException {
+class SQLParseSourceException extends ElasticsearchException {
 
-    public SQLParseSourceException(SQLXContentSourceContext context, String msg) {
+    SQLParseSourceException(String msg) {
         super("Parse Failure [" + msg + "]");
-    }
-
-    public SQLParseSourceException(SQLXContentSourceContext context, String msg, Throwable cause) {
-        super("Parse Failure [" + msg + "]", cause);
     }
 }

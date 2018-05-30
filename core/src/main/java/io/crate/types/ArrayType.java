@@ -21,28 +21,18 @@
 
 package io.crate.types;
 
-import io.crate.Streamer;
-import org.elasticsearch.common.io.stream.StreamInput;
-import org.elasticsearch.common.io.stream.StreamOutput;
+import java.util.Collection;
 
-import java.io.IOException;
-import java.util.List;
-
-public class ArrayType extends DataType implements CollectionType, Streamer<Object[]> {
+public class ArrayType extends CollectionType {
 
     public static final int ID = 100;
-    private DataType<?> innerType;
-
-    public ArrayType() {
-    }
 
     public ArrayType(DataType<?> innerType) {
-        this.innerType = innerType;
+        super(innerType);
     }
 
-    @Override
-    public DataType<?> innerType() {
-        return this.innerType;
+    public ArrayType() {
+        super();
     }
 
     @Override
@@ -51,23 +41,26 @@ public class ArrayType extends DataType implements CollectionType, Streamer<Obje
     }
 
     @Override
-    public String getName() {
-        return innerType.getName() + "_array";
+    public Precedence precedence() {
+        return Precedence.ArrayType;
     }
 
     @Override
-    public Streamer<?> streamer() {
-        return this;
+    public String getCollectionName() {
+        return "array";
     }
 
     @Override
     public Object[] value(Object value) {
+        // We can pass in Collections and Arrays here but we always
+        // have to return arrays since a lot of code makes assumptions
+        // about this.
         if (value == null) {
             return null;
         }
         Object[] result;
-        if (value instanceof List) {
-            List values = (List)value;
+        if (value instanceof Collection) {
+            Collection values = (Collection) value;
             result = new Object[values.size()];
             int idx = 0;
             for (Object o : values) {
@@ -75,86 +68,19 @@ public class ArrayType extends DataType implements CollectionType, Streamer<Obje
                 idx++;
             }
         } else {
-            Object[] inputArray = (Object[])value;
-            result = new Object[inputArray.length];
-            for (int i = 0; i < inputArray.length; i++) {
-                result[i] = innerType.value(inputArray[i]);
+            Object[] values = (Object[]) value;
+            result = new Object[values.length];
+            int idx = 0;
+            for (Object o : values) {
+                result[idx] = innerType.value(o);
+                idx++;
             }
         }
         return result;
     }
 
     @Override
-    public boolean isConvertableTo(DataType other) {
-        return other.id() == UndefinedType.ID ||
-                ((other instanceof ArrayType)
-                && this.innerType.isConvertableTo(((ArrayType) other).innerType));
-    }
-
-    @Override
-    public int compareValueTo(Object val1, Object val2) {
-        if (val2 == null) {
-            return 1;
-        } else if (this == val1) {
-            return 0;
-        }
-
-        int size1 = val1 instanceof List ? ((List)val1).size() : ((Object[])val1).length;
-        int size2 = val2 instanceof List ? ((List)val2).size() : ((Object[])val2).length;
-        return Integer.compare(size1, size2);
-    }
-
-    @Override
-    public int compareTo(Object o) {
-        if (!(o instanceof ArrayType)) return -1;
-        return Integer.compare(innerType.id(), ((ArrayType)o).innerType().id());
-    }
-
-    @Override
-    public void readFrom(StreamInput in) throws IOException {
-        innerType = DataTypes.fromStream(in);
-    }
-
-    @Override
-    public void writeTo(StreamOutput out) throws IOException {
-        DataTypes.toStream(innerType, out);
-    }
-
-    @Override
-    public Object[] readValueFrom(StreamInput in) throws IOException {
-        int size = in.readVInt();
-        Object[] array = new Object[size];
-        for (int i = 0; i < size; i++) {
-            array[i] = innerType.streamer().readValueFrom(in);
-        }
-        return array;
-    }
-
-    @Override
-    public void writeValueTo(StreamOutput out, Object values) throws IOException {
-        Object[] array = (Object[]) values;
-        out.writeVInt(array.length);
-        for (Object value : array) {
-            innerType.streamer().writeValueTo(out, value);
-        }
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof ArrayType)) return false;
-        if (!super.equals(o)) return false;
-
-        ArrayType setType = (ArrayType) o;
-
-        if (!innerType.equals(setType.innerType)) return false;
-        return true;
-    }
-
-    @Override
-    public int hashCode() {
-        int result = super.hashCode();
-        result = 31 * result + innerType.hashCode();
-        return result;
+    public CollectionType newInstance(DataType innerType) {
+        return new ArrayType(innerType);
     }
 }

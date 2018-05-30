@@ -1,0 +1,87 @@
+.. _version_1.0.1:
+
+=============
+Version 1.0.1
+=============
+
+Released on 2016/12/12.
+
+.. NOTE::
+
+   If you are upgrading a cluster, you must be running CrateDB 0.57.0 or higher
+   before you upgrade to 1.0.1.
+
+   If you want to perform a `rolling upgrade`_, your current CrateDB version
+   number must be :ref:`version_1.0.0`. If you want to upgrade from a version
+   prior to this, the upgrade will introduce all of the breaking changes listed
+   for :ref:`version_1.0.0`, and will require a `full restart upgrade`_.
+
+.. WARNING::
+
+   Before upgrading, you should `back up your data`_.
+
+.. _rolling upgrade: http://crate.io/docs/crate/guide/best_practices/rolling_upgrade.html
+.. _full restart upgrade: http://crate.io/docs/crate/guide/best_practices/full_restart_upgrade.html
+.. _back up your data: https://crate.io/a/backing-up-and-restoring-crate/
+
+.. rubric:: Table of Contents
+
+.. contents::
+   :local:
+
+Changelog
+=========
+
+Changes
+-------
+
+ - ``INSERT`` statements now support ``SELECT`` statements without parentheses.
+
+ - Updated crate-admin to 1.0.2 which includes the following changes:
+
+    - Removed pepper widget, support links are now in a Help section along with
+      the Get Started tutorial.
+
+    - Changed read notification behaviour so that all items are marked as read
+      upon opening the settings.
+
+    - Lowered opacity of placeholder query in the console.
+
+    - Fix intercom support that disappeared during the implementation of the
+      new admin-ui layout.
+
+    - Fix Radio button position in load overview.
+
+    - Made schema tabs more distinguishable from tables in the table list.
+
+    - Updated link to support website in contact widget.
+
+Fixes
+-----
+
+ - Fixed scalar signature registration, NULL literals are now supported.
+
+ - Fixed usage of aggregations with NULL values, no exception will be thrown
+   anymore but instead NULL values are properly processed.
+
+ - The ``chunk_size`` and ``buffer_size`` settings for creating repositories
+   of type ``S3`` are now parsed correctly.
+
+ - CrateDB no longer throws an error when ``ANY`` or ``ALL`` array comparison
+   expressions are used in ``SELECT`` list. e.g.::
+
+       select 'foo' = any(some_array)
+
+ - Fixed an issue that could lead to incorrect results if the ``WHERE`` clause
+   contains primary key comparisons together with other functions like match.
+
+ - Fixed an issue that caused select queries with bulk arguments to hang
+   instead of throwing the proper error.
+
+ - Fixed a rare race condition that could happen on select queries during a
+   shard relocation leading to a ``ArrayIndexOutOfBoundsException`` or a wrong
+   result.
+
+ - Creating new partitions could have failed if the partitioned table was
+   created prior to CrateDB version 0.55.0 and the table contained a ``object``
+   column. This issue has been fixed.

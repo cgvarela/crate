@@ -21,15 +21,23 @@
 
 package io.crate.exceptions;
 
+import io.crate.metadata.PartitionName;
+import io.crate.metadata.RelationName;
+
+import java.util.Collections;
 import java.util.Locale;
 
-public class PartitionUnknownException extends ResourceUnknownException{
+public class PartitionUnknownException extends ResourceUnknownException implements TableScopeException {
 
-    public PartitionUnknownException(String tableName, String partitionIdent) {
+    private RelationName relationName;
+
+    public PartitionUnknownException(PartitionName partitionName) {
         super(String.format(Locale.ENGLISH,
-                "No partition for table '%s' with ident '%s' exists",
-                tableName,
-                partitionIdent));
+            "No partition for table '%s' with ident '%s' exists",
+            partitionName.relationName().fqn(),
+            partitionName.ident()));
+
+        this.relationName = partitionName.relationName();
     }
 
     @Override
@@ -38,7 +46,7 @@ public class PartitionUnknownException extends ResourceUnknownException{
     }
 
     @Override
-    public Object[] args() {
-        return new Object[0];
+    public Iterable<RelationName> getTableIdents() {
+        return Collections.singletonList(relationName);
     }
 }

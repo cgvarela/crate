@@ -24,44 +24,70 @@ package io.crate.metadata.information;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.crate.metadata.ColumnIdent;
-import io.crate.metadata.ReferenceIdent;
-import io.crate.metadata.ReferenceInfo;
-import io.crate.metadata.TableIdent;
-import io.crate.planner.RowGranularity;
-import io.crate.types.DataType;
+import io.crate.metadata.RelationName;
+import io.crate.metadata.RoutineInfo;
+import io.crate.metadata.RowContextCollectorExpression;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.expressions.RowCollectExpressionFactory;
+import io.crate.metadata.table.ColumnRegistrar;
 import io.crate.types.DataTypes;
+
+import java.util.Map;
 
 public class InformationRoutinesTableInfo extends InformationTableInfo {
 
     public static final String NAME = "routines";
-    public static final TableIdent IDENT = new TableIdent(InformationSchemaInfo.NAME, NAME);
+    public static final RelationName IDENT = new RelationName(InformationSchemaInfo.NAME, NAME);
 
     public static class Columns {
-        public static final ColumnIdent ROUTINE_NAME = new ColumnIdent("routine_name");
-        public static final ColumnIdent ROUTINE_TYPE = new ColumnIdent("routine_type");
+        static final ColumnIdent SPECIFIC_NAME = new ColumnIdent("specific_name");
+        static final ColumnIdent ROUTINE_NAME = new ColumnIdent("routine_name");
+        static final ColumnIdent ROUTINE_TYPE = new ColumnIdent("routine_type");
+        static final ColumnIdent ROUTINE_SCHEMA = new ColumnIdent("routine_schema");
+        static final ColumnIdent ROUTINE_BODY = new ColumnIdent("routine_body");
+        static final ColumnIdent ROUTINE_DEFINITION = new ColumnIdent("routine_definition");
+        static final ColumnIdent DATA_TYPE = new ColumnIdent("data_type");
+        static final ColumnIdent IS_DETERMINISTIC = new ColumnIdent("is_deterministic");
     }
 
-    public static class ReferenceInfos {
-        public static final ReferenceInfo ROUTINE_NAME = info(Columns.ROUTINE_NAME, DataTypes.STRING);
-        public static final ReferenceInfo ROUTINE_TYPE = info(Columns.ROUTINE_TYPE, DataTypes.STRING);
+    private static ColumnRegistrar columnRegistrar() {
+        return new ColumnRegistrar(IDENT, RowGranularity.DOC)
+            .register(Columns.ROUTINE_NAME, DataTypes.STRING)
+            .register(Columns.ROUTINE_TYPE, DataTypes.STRING)
+            .register(Columns.ROUTINE_SCHEMA, DataTypes.STRING)
+            .register(Columns.SPECIFIC_NAME, DataTypes.STRING)
+            .register(Columns.ROUTINE_BODY, DataTypes.STRING)
+            .register(Columns.ROUTINE_DEFINITION, DataTypes.STRING)
+            .register(Columns.DATA_TYPE, DataTypes.STRING)
+            .register(Columns.IS_DETERMINISTIC, DataTypes.BOOLEAN);
     }
 
-    private static ReferenceInfo info(ColumnIdent columnIdent, DataType dataType) {
-        return new ReferenceInfo(new ReferenceIdent(IDENT, columnIdent), RowGranularity.DOC, dataType);
+    public static Map<ColumnIdent, RowCollectExpressionFactory<RoutineInfo>> expressions() {
+        return ImmutableMap.<ColumnIdent, RowCollectExpressionFactory<RoutineInfo>>builder()
+            .put(InformationRoutinesTableInfo.Columns.ROUTINE_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(RoutineInfo::name))
+            .put(InformationRoutinesTableInfo.Columns.ROUTINE_TYPE,
+                () -> RowContextCollectorExpression.objToBytesRef(RoutineInfo::type))
+            .put(InformationRoutinesTableInfo.Columns.ROUTINE_SCHEMA,
+                () -> RowContextCollectorExpression.objToBytesRef(RoutineInfo::schema))
+            .put(InformationRoutinesTableInfo.Columns.SPECIFIC_NAME,
+                () -> RowContextCollectorExpression.objToBytesRef(RoutineInfo::specificName))
+            .put(InformationRoutinesTableInfo.Columns.ROUTINE_BODY,
+                () -> RowContextCollectorExpression.objToBytesRef(RoutineInfo::body))
+            .put(InformationRoutinesTableInfo.Columns.ROUTINE_DEFINITION,
+                () -> RowContextCollectorExpression.objToBytesRef(RoutineInfo::definition))
+            .put(InformationRoutinesTableInfo.Columns.DATA_TYPE,
+                () -> RowContextCollectorExpression.objToBytesRef(RoutineInfo::dataType))
+            .put(InformationRoutinesTableInfo.Columns.IS_DETERMINISTIC,
+                () -> RowContextCollectorExpression.forFunction(RoutineInfo::isDeterministic))
+            .build();
     }
 
-    protected InformationRoutinesTableInfo(InformationSchemaInfo schemaInfo) {
-        super(schemaInfo,
-                IDENT,
-                ImmutableList.<ColumnIdent>of(),
-                ImmutableMap.<ColumnIdent, ReferenceInfo>builder()
-                        .put(Columns.ROUTINE_NAME, ReferenceInfos.ROUTINE_NAME)
-                        .put(Columns.ROUTINE_TYPE, ReferenceInfos.ROUTINE_TYPE)
-                        .build(),
-                ImmutableList.<ReferenceInfo>builder()
-                        .add(ReferenceInfos.ROUTINE_NAME)
-                        .add(ReferenceInfos.ROUTINE_TYPE)
-                        .build()
+    InformationRoutinesTableInfo() {
+        super(
+            IDENT,
+            columnRegistrar(),
+            ImmutableList.of()
         );
     }
 }

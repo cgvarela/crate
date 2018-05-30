@@ -22,43 +22,92 @@
 package io.crate.integrationtests;
 
 
+import io.crate.common.Hex;
+import io.crate.test.utils.Blobs;
+import org.apache.http.Header;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.HttpPut;
+import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.entity.ContentType;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
-import org.elasticsearch.common.transport.InetSocketTransportAddress;
+import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.http.HttpServerTransport;
 import org.junit.Before;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.Locale;
 
-public class SQLHttpIntegrationTest extends SQLTransportIntegrationTest {
+import static org.hamcrest.Matchers.is;
+
+public abstract class SQLHttpIntegrationTest extends SQLTransportIntegrationTest {
 
     private HttpPost httpPost;
+    private InetSocketAddress address;
+
+    protected final CloseableHttpClient httpClient;
+    private final boolean usesSSL;
+
+    public SQLHttpIntegrationTest() {
+        this(false);
+    }
+
+    public SQLHttpIntegrationTest(boolean useSSL) {
+        this.httpClient = HttpClients.custom()
+            .setSSLHostnameVerifier(new NoopHostnameVerifier()).build();
+        this.usesSSL = useSSL;
+    }
+
+    @Override
+    protected Settings nodeSettings(int nodeOrdinal) {
+        return Settings.builder()
+            .put(super.nodeSettings(nodeOrdinal))
+            .put("http.enabled", true)
+            .put("http.host", "127.0.0.1")
+            .build();
+    }
 
     @Before
     public void setup() {
-        HttpServerTransport httpServerTransport = cluster().getInstance(HttpServerTransport.class);
-        InetSocketAddress address = ((InetSocketTransportAddress) httpServerTransport.boundAddress().publishAddress())
-                .address();
-        httpPost = new HttpPost(String.format("http://%s:%s/_sql?error_trace", address.getHostName(), address.getPort()));
+        HttpServerTransport httpServerTransport = internalCluster().getInstance(HttpServerTransport.class);
+        address = httpServerTransport.boundAddress().publishAddress().address();
+        httpPost = new HttpPost(String.format(Locale.ENGLISH,
+            "%s://%s:%s/_sql?error_trace",
+            usesSSL ? "https" : "http", address.getHostName(), address.getPort()));
     }
 
-    protected CloseableHttpClient httpClient = HttpClients.createDefault();
 
-    protected CloseableHttpResponse post(String body) throws IOException {
-
-        if(body != null){
-            StringEntity bodyEntity = new StringEntity(body);
+    protected CloseableHttpResponse post(String body, @Nullable Header[] headers) throws IOException {
+        if (body != null) {
+            StringEntity bodyEntity = new StringEntity(body, ContentType.APPLICATION_JSON);
             httpPost.setEntity(bodyEntity);
         }
+        httpPost.setHeaders(headers);
         return httpClient.execute(httpPost);
     }
 
-    protected CloseableHttpResponse post() throws IOException {
-        return post(null);
+    protected CloseableHttpResponse post(String body) throws IOException {
+        return post(body, null);
     }
 
+    protected String upload(String table, String content) throws IOException {
+        String digest = blobDigest(content);
+        String url = Blobs.url(usesSSL, address, table, digest);
+        HttpPut httpPut = new HttpPut(url);
+        httpPut.setEntity(new StringEntity(content));
+
+        CloseableHttpResponse response = httpClient.execute(httpPut);
+        assertThat(response.getStatusLine().getStatusCode(), is(201));
+        response.close();
+
+        return url;
+    }
+
+    protected String blobDigest(String content) {
+        return Hex.encodeHexString(Blobs.digest(content));
+    }
 }

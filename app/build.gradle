@@ -1,121 +1,392 @@
-apply plugin:'distribution'
-apply plugin: 'java'
+import org.apache.tools.ant.filters.ReplaceTokens
+
+import java.nio.file.Paths
+
+buildscript {
+    repositories {
+        jcenter()
+    }
+}
+
+apply plugin: 'distribution'
+apply from: "$rootDir/gradle/javaModule.gradle"
+apply plugin: 'signing'
 
 archivesBaseName = 'crate-app'
+group = "io.crate"
+
 
 configurations {
-    all*.exclude group: 'org.elasticsearch'
-}
-
-task release(dependsOn: 'distTar') << {
-    logger.info("released version: " + getVersion.version);
-}
-
-task nightly(dependsOn: 'distTar') << {
-    logger.info("nightly version: " + getVersion.version);
-}
-
-task getVersion ( dependsOn: 'classes') << {
-    def stdout = new ByteArrayOutputStream()
-    javaexec {
-        classpath = sourceSets.main.runtimeClasspath
-        main = 'io.crate.Version'
-        standardOutput = stdout
+    compileNotTransitive {
+        transitive = false
     }
-    ext.gitTag = "git describe".execute().in.text.trim()
-    ext.version = stdout.toString().trim().split(" ")[1].replace(',','').trim()
+}
 
-    if (gradle.taskGraph.hasTask(release)) {
-        assert gitTag == version, "Version mismatch gitTag: " + gitTag + " does not match crate version: " + version
-    } else if (gradle.taskGraph.hasTask(nightly)) {
-        def date = new Date().format('yyyyMMddHHmm')
-        def shortHash = "git rev-parse --short HEAD".execute().in.text.trim()
-        ext.version = version.replace('-SNAPSHOT','') + "-" + date + "-" + shortHash
-    } else if (!gradle.taskGraph.hasTask(':client:uploadArchives')) {
-        def shortHash = "git rev-parse --short HEAD".execute().in.text.trim()
-        ext.version = version + "-" + shortHash
+evaluationDependsOn(':es')
+evaluationDependsOn(':core')
+evaluationDependsOn(':sql')
+evaluationDependsOn(':sql-parser')
+evaluationDependsOn(':dex')
+evaluationDependsOn(':shared')
+evaluationDependsOn(':blob')
+evaluationDependsOn(':http')
+evaluationDependsOn(':udc')
+evaluationDependsOn(':dns-discovery')
+
+dependencies {
+    compile project(':sql')
+    compile project(':blob')
+    compile project(':http')
+    compile project(':udc')
+    compile project(':azure-discovery')
+    compile project(':dns-discovery')
+    compile project(':es:es-discovery-ec2')
+    compile project(':es:es-repository-url')
+    compile project(':es:es-repository-s3')
+    compile project(':es:es-transport')
+    compile project(':es:es-analysis-common')
+    compile('org.apache.xbean:xbean-finder:4.5') {
+        exclude group: 'org.apache.xbean', module: 'xbean-asm-util'
     }
 
-    logger.quiet("gitTag: " + gitTag)
-    logger.quiet("version: " + version)
+    // include the enterprise module in classpath to be able to use it with Crate launched from within intellij
+    runtime project(':enterprise:users')
+    runtime project(':enterprise:ssl-impl')
+    runtime project(':enterprise:mqtt')
+    runtime project(':enterprise:hll')
 
+    testCompile project(':integration-testing')
 
+    compileNotTransitive project(':core')
+    compileNotTransitive project(':es:es-core')
+    compileNotTransitive project(':sql')
+    compileNotTransitive project(':sql-parser')
+    compileNotTransitive project(':dex')
+    compileNotTransitive project(':shared')
+    compileNotTransitive project(':blob')
+    compileNotTransitive project(':http')
+    compileNotTransitive project(':udc')
+    compileNotTransitive project(':dns-discovery')
+    compileNotTransitive project(':es:es-discovery-ec2')
+    compileNotTransitive project(':es:es-repository-url')
+    compileNotTransitive project(':es:es-repository-s3')
+    compileNotTransitive project(':es:es-transport')
+    compileNotTransitive project(':es:es-analysis-common')
 }
+
+task release(dependsOn: 'distTar') {
+    doLast {
+        logger.info("released version: " + project(':core').getVersion.version)
+    }
+}
+
+task nightly(dependsOn: 'distTar') {
+    doLast {
+        logger.info("nightly version: " + project(':core').getVersion.version)
+    }
+}
+
+task writeBuildInfo(dependsOn: [':core:getVersion']) {
+    doLast {
+        def hash = "git rev-parse HEAD".execute().in.text.trim()
+
+        def file = new File(project.projectDir.path + "/src/main/resources/crate-build.properties")
+        if (!file.isFile()) {
+            def parentDir = new File(file.parent)
+            if (!parentDir.isDirectory()) {
+                parentDir.mkdirs()
+            }
+            file.createNewFile()
+        }
+
+        copy {
+            into('src/main/dist/bin')
+            from('src/bin') {
+                filter(ReplaceTokens, tokens: [version: project(':core').getVersion.version])
+            }
+        }
+
+        ant.propertyfile(file: file.path, comment: 'Build Properties') {
+            ant.entry(key: 'hash', value: hash)
+            ant.entry(key: 'timestamp', value: System.currentTimeMillis())
+        }
+    }
+}
+
+
+processResources.dependsOn('writeBuildInfo')
 
 task dist {
-    dependsOn ':docs:itest', distTar, distZip
+    dependsOn ':blackbox:itest', distTar, distZip
 }
 
-task install {
-    dependsOn installDist
+task myJavadocs(type: Javadoc, dependsOn: processResources) {
+    classpath = configurations.compile
+    source = sourceSets.main.allJava +
+            project(':core').sourceSets.main.allJava +
+            project(':sql').sourceSets.main.allJava +
+            project(':sql-parser').sourceSets.main.allJava +
+            project(':dex').sourceSets.main.allJava +
+            project(':shared').sourceSets.main.allJava +
+            project(':blob').sourceSets.main.allJava +
+            project(':udc').sourceSets.main.allJava
+}
+
+task javadocJar(type: Jar, dependsOn: [myJavadocs]) {
+    classifier = 'javadoc'
+    from myJavadocs.destinationDir
+    manifest {
+        attributes("Implementation-Title": "Crate.IO")
+    }
+}
+
+task buildJavadocJar(dependsOn: [':core:getVersion', myJavadocs]) {
+    doLast {
+        ext.version = project(':core').getVersion.version
+        project.version = ext.version
+        tasks.javadocJar.execute()
+    }
+}
+
+task sourceJar(type: Jar) {
+    classifier = 'sources'
+    from(sourceSets.main.allSource +
+            project(':core').sourceSets.main.allJava +
+            project(':sql').sourceSets.main.allJava +
+            project(':sql-parser').sourceSets.main.allJava +
+            project(':dex').sourceSets.main.allJava +
+            project(':shared').sourceSets.main.allJava +
+            project(':blob').sourceSets.main.allJava +
+            project(':udc').sourceSets.main.allJava)
+    manifest {
+        attributes("Implementation-Title": "Crate.IO")
+    }
+}
+
+task buildSourceJar(dependsOn: [':core:getVersion']) {
+    doLast {
+        ext.version = project(':core').getVersion.version
+        project.version = ext.version
+        tasks.sourceJar.execute()
+    }
+}
+
+artifacts {
+    archives jar
+    archives sourceJar
+    archives javadocJar
+}
+
+task signJars(type: Sign, dependsOn: [jar, buildSourceJar, buildJavadocJar]) {
+    sign configurations.archives
+}
+
+install.dependsOn([jar, ':core:getVersion', buildSourceJar, buildJavadocJar])
+install {
+    repositories {
+        mavenInstaller {
+            pom.whenConfigured {
+                pom ->
+                    pom.dependencies.clear()
+                    project.parent.subprojects.findAll { it.name != 'app' }.each {
+                        if (it.hasProperty('install')) {
+                            pom.dependencies.addAll(it.install.repositories.mavenInstaller.pom.getEffectivePom().dependencies.findAll {
+                                it.groupId != 'io.crate'
+                            })
+                        }
+                    }
+            }
+            pom.project {
+                artifactId 'crate'
+                name 'crate'
+                description 'Crate.IO'
+                url 'https://crate.io'
+                licenses {
+                    license {
+                        name 'The Apache Software License, Version 2.0'
+                        url 'http://www.apache.org/license/LICENSE-2.0.txt'
+                        distribution 'repo'
+                    }
+                }
+                developers {
+                    developer {
+                        id 'crate'
+                        name 'Crate Developers'
+                        email 'office@crate.io'
+                    }
+                }
+            }
+        }
+    }
+}
+
+project.ext.bintrayUsername = project.hasProperty('bintrayUsername') ? bintrayUsername : ""
+project.ext.bintrayPassword = project.hasProperty('bintrayPassword') ? bintrayPassword : ""
+
+uploadArchives.dependsOn([jar, ':core:getVersion', buildSourceJar, buildJavadocJar, signJars])
+uploadArchives {
+    repositories {
+        mavenDeployer {
+            beforeDeployment {
+                MavenDeployment deployment ->
+                    signing.signPom(deployment)
+                    if (project.ext.bintrayUsername.length() == 0 || project.ext.bintrayPassword.length() == 0) {
+                        throw new StopExecutionException("uploadArchives cannot be called without bintray username and password")
+                    }
+            }
+            pom.whenConfigured {
+                pom ->
+                    pom.dependencies.clear()
+                    project.parent.subprojects.findAll { it.name != 'app' && it.name != 'sigar' }.each {
+                        if (it.hasProperty('install')) {
+                            pom.dependencies.addAll(it.install.repositories.mavenInstaller.pom.getEffectivePom().dependencies.findAll {
+                                it.groupId != 'io.crate'
+                            })
+                        }
+                    }
+            }
+            pom.project {
+                artifactId 'crate'
+                name 'crate'
+                description 'Crate.IO'
+                url 'https://crate.io'
+                scm {
+                    url 'https://github.com/crate/crate'
+                    connection 'scm:git:git://github.com/crate/crate.git'
+                    developerConnection 'scm:git:ssh:git@github.com:crate/crate.git'
+                }
+                licenses {
+                    license {
+                        name 'The Apache Software License, Version 2.0'
+                        url 'http://www.apache.org/license/LICENSE-2.0.txt'
+                        distribution 'repo'
+                    }
+                }
+                developers {
+                    developer {
+                        id 'crate'
+                        name 'Crate Developers'
+                        email 'office@crate.io'
+                    }
+                }
+            }
+            pom {
+                artifactId = 'crate'
+            }
+            repository(id: 'crate', url: 'https://api.bintray.com/maven/crate/crate/crate') {
+                authentication(userName: project.ext.bintrayUsername, password: project.ext.bintrayPassword)
+            }
+        }
+    }
 }
 
 distTar {
-    dependsOn getVersion
+    dependsOn ':core:getVersion'
     compression = Compression.GZIP
     baseName = 'crate'
     extension = 'tar.gz'
     doFirst {
-        version = getVersion.version
+        version = project(':core').getVersion.version
+        chooseReleaseNotes.execute()
     }
 }
 
 distZip {
-    dependsOn getVersion
+    dependsOn ':core:getVersion'
     baseName = 'crate'
     doFirst {
-        version = getVersion.version
+        version = project(':core').getVersion.version
+        chooseReleaseNotes.execute()
+    }
+}
+
+installDist {
+    doFirst {
+        chooseReleaseNotes.execute()
     }
 }
 
 ext {
     downloadDir = new File(buildDir, 'downloads')
-    plugin_crateadmin_version = '0.9.3'
-    crash_version = '0.10.1'
-}
-
-evaluationDependsOn(':es')
-
-dependencies {
-    compile project(':core')
-    compile project(':es')
-    compile project(':sql')
-    compile project(':admin-ui')
-    compile project(':blob')
-    compile project(':udc')
-
-    testCompile ('com.carrotsearch.randomizedtesting:randomizedtesting-runner:2.0.15') {
-        exclude group: 'junit', module: 'junit'
-    }
-    testCompile 'junit:junit:4.11'
+    crash_version = '0.24.0'
+    adminui_version = '1.10.2'
 }
 
 def rootDir = project.parent.projectDir
+def libs = project.configurations.runtime.filter { !it.toPath().startsWith(Paths.get(rootDir.toString(), "enterprise")) }
+
+// For releases choose the file under the release_notes structure
+// and for all other builds choose CHANGES.txt which contains the unreleased changes
+task chooseReleaseNotes(dependsOn: [':core:getVersion']) {
+    doLast {
+        def version = project(':core').getVersion.version
+        def releaseNotesDir = "$rootDir/blackbox/docs/appendices/release-notes"
+        def releaseNotesFile = version.replaceAll('-.*', '') + '.rst'
+        if (new File(releaseNotesDir + "/" + releaseNotesFile).exists()) {
+            copy {
+                from("$releaseNotesDir") {
+                    include "$releaseNotesFile"
+                }
+                into project.buildDir.path + "/releaseNotes"
+                rename releaseNotesFile, 'CHANGES.txt'
+            }
+        } else {
+            copy {
+                from("$rootDir") {
+                    include 'CHANGES.txt'
+                }
+                into project.buildDir.path + "/releaseNotes"
+            }
+        }
+    }
+}
 
 distributions {
     main {
         baseName = 'crate'
         contents {
             into("") {
-                from "$rootDir"
-                include 'LICENSE.txt'
-                include 'NOTICE'
-                include 'README.rst'
-                include 'CHANGES.txt'
+                from("$rootDir") {
+                    include 'LICENSE'
+                    include 'NOTICE'
+                    include 'README.rst'
+                }
+                from(project.buildDir.path + "/releaseNotes") {
+                    include 'CHANGES.txt'
+                }
+                File.createTempDir().with {
+                    def tmpLogs = new File(absolutePath, 'logs')
+                    tmpLogs.mkdirs()
+                    from (absolutePath) {
+                        includeEmptyDirs = true
+                    }
+                }
             }
             into("lib") {
-                from project.configurations.runtime
-                // sigar gets included from the checked in runtime dependency in :es:
-                exclude 'sigar-*.jar'
+                from libs
+                exclude 'crate-*.jar'
+                exclude 'es.jar'
+                exclude 'es-*.jar'
             }
             into("lib") {
                 from jar
             }
+            into("lib/enterprise") {
+                from("enterprise")
+            }
+            into("lib") {
+                from("oss_modules")
+            }
             into('plugins') {
-                from 'plugins'
+                from('plugins') {
+                    includeEmptyDirs = true
+                }
+            }
+            into('lib/site') {
+                from ('adminui/_site')
             }
             into('bin') {
-                from ("${downloadDir}/crash_standalone") {
+                from("${downloadDir}/crash_standalone") {
                     fileMode = 0755
                 }
             }
@@ -123,74 +394,184 @@ distributions {
     }
 }
 
+jar {
+    dependsOn ':core:getVersion'
 
-def download (String url, String name){
-    downloadDir.mkdirs()
-    def dest = new File(downloadDir, name)
-    ant.get(
-            src: url,
-            verbose: true,
-            usetimestamp: true,
-            skipexisting: true,
-            dest: dest
-    )
-    return dest;
-}
+    doFirst {
+        manifest.attributes 'Implementation-Version': project(':core').getVersion.version
+        // Needed by ES which validates those manifest attributes in Build class
+        manifest.attributes 'Build-Date': project(':core').getVersion.buildDate
+        manifest.attributes 'Change': project(':core').getVersion.buildShortHash
+        project.version = project(':core').getVersion.version
+        def serviceDir = file("$buildDir/META-INF/services")
+        serviceDir.deleteDir()
+        serviceDir.mkdirs()
 
-def extractTopfolder(File src, String trg){
-    copy {
-        includeEmptyDirs = false
-        FileTree ft
-        if(src.name.endsWith('.zip')) {
-            ft = zipTree(src)
-        }
-        if(src.name.endsWith('.tar.gz')) {
-            ft = tarTree(src)
-        }
-        from(ft) {
-            eachFile { details ->
-                details.path =
-                    details.path.substring(details.relativePath.segments[0].length())
+        // copy all service files from deps to buildDir
+        for (file in configurations.compileNotTransitive) {
+            zipTree(file).matching { include 'META-INF/services/*' }.each { f ->
+                new File(serviceDir, f.name) << f.getText("UTF-8") << "\n"
             }
         }
-        into trg
+    }
+
+    from(configurations.compileNotTransitive.collect { it.isDirectory() ? it : zipTree(it) }) {
+        exclude 'META-INF/**' // Don't let Gradle merge service files
+    }
+
+    // include service files from the buildDir
+    from fileTree(buildDir).matching { include 'META-INF/services/*' }
+}
+
+task collectEnterpriseModules(
+        dependsOn: [':enterprise:users:jar',
+                    ':enterprise:ssl-impl:jar',
+                    ':enterprise:mqtt:jar']) {
+    // this task collects the enterprise module jar into a single folder
+    // named enterprise from which the files are taken for the installDist task
+    doLast {
+        copy {
+            from(project(':enterprise:users').tasks.jar.archivePath)
+            from(project(':enterprise:ssl-impl').tasks.jar.archivePath)
+            from(project(':enterprise:mqtt').tasks.jar.archivePath)
+            into 'enterprise'
+        }
+    }
+}
+collectEnterpriseModules.outputs.file ('enterprise')
+
+
+task downloadPlugins(
+        dependsOn: ['downloadAdminUI',
+                    ':es:es-repository-hdfs:jar',
+                    ':azure-discovery:jar',
+                    ':enterprise:jmx-monitoring:jar',
+                    ':enterprise:lang-js:jar',
+                    ':enterprise:hll:jar']) {
+    doLast {
+        // copy es-repository-hdfs plugin
+        copy {
+            from(project(':es:es-repository-hdfs').buildDir.path + '/libs')
+            into 'plugins/es-repository-hdfs'
+        }
+        copy {
+            from(project(':es:es-repository-hdfs').buildDir.path + '/plugin-descriptor.properties')
+            into 'plugins/es-repository-hdfs'
+        }
+
+        copy {
+            // jar file
+            from(project(':azure-discovery').tasks.jar.archivePath)
+            // generated plugin-descriptor.properties
+            from(project(':azure-discovery').buildDir.path + '/tmp/plugin-descriptor.properties')
+            into 'plugins/crate-azure-discovery'
+        }
+
+        copy {
+            from("${buildDir}/crate-admin/")
+            into 'adminui'
+        }
+        copy {
+            from(project(':enterprise:jmx-monitoring').tasks.jar.archivePath)
+            into 'plugins/enterprise/jmx-monitoring'
+        }
+        copy {
+            from(project(':enterprise:lang-js').tasks.jar.archivePath)
+            from(project(':enterprise:lang-js').buildDir.path + '/tmp/plugin-descriptor.properties')
+            into 'plugins/enterprise/lang-js'
+        }
+        copy {
+            from(project(':enterprise:hll').tasks.jar.archivePath)
+            into 'plugins/enterprise/hll'
+        }
     }
 }
 
-task downloadPlugins << {
-    def dest = download(
-            "https://cdn.crate.io/downloads/releases/crate-admin-${plugin_crateadmin_version}.tar.gz",
-            "crate-admin-${plugin_crateadmin_version}.tar.gz"
-    )
-    extractTopfolder(dest, 'plugins/crate-admin/_site')
+downloadPlugins.outputs.file ('plugins')
+
+
+
+task downloadCrash {
+    doLast {
+        download(
+                downloadDir,
+                "https://cdn.crate.io/downloads/releases/crash_standalone_${crash_version}",
+                "crash_standalone")
+    }
 }
 
-task downloadCrash << {
-    def dest = download(
-         "https://cdn.crate.io/downloads/releases/crash_standalone_${crash_version}",
-         "crash_standalone"
-    )
+task downloadAdminUI {
+    doLast {
+        def dest
+        if (gradle.taskGraph.hasTask(':app:nightly')) {
+            dest = download(
+                    downloadDir,
+                    "https://cdn.crate.io/downloads/releases/nightly/crate-admin-latest.tar.gz",
+                    "crate-admin-latest.tar.gz"
+            )
+        } else {
+            dest = download(
+                    downloadDir,
+                    "https://cdn.crate.io/downloads/releases/crate-admin-${adminui_version}.tar.gz",
+                    "crate-admin-${adminui_version}.tar.gz"
+            )
+        }
+        extractTopfolder(dest, "${buildDir}/crate-admin/_site")
+    }
 }
 
-processResources.dependsOn(downloadPlugins, downloadCrash)
+
+processResources.dependsOn(downloadPlugins, downloadCrash, collectEnterpriseModules)
 
 task(runDebug, dependsOn: 'classes', type: JavaExec) {
-    main = 'io.crate.bootstrap.CrateF'
+    main = 'io.crate.bootstrap.CrateDB'
     debug = true
+    enableAssertions = true
     classpath = sourceSets.main.runtimeClasspath
-    maxHeapSize = '512m'
+    systemProperties += ['es.path.home': "${project.buildDir}/$name"]
+}
+
+task(run, dependsOn: 'classes', type: JavaExec) {
+    main = 'io.crate.bootstrap.CrateDB'
+    debug = false
+    enableAssertions = true
+    classpath = sourceSets.main.runtimeClasspath
+    systemProperties += ['es.path.home': "${project.buildDir}/$name"]
+    systemProperties System.getProperties()
 }
 
 test {
+    testLogging {
+        exceptionFormat = 'full'
+    }
+
     jacoco {
-        excludes = [ "*Test*" ]
+        excludes = ["*Test*"]
     }
 }
 
 sourceSets {
     test {
-        resources {
-            srcDir 'src/test/java'
+        output.resourcesDir = 'build/resources'
+    }
+}
+
+clean.dependsOn(['cleanDownloadPlugins',
+                 'cleanCollectEnterpriseModules'])
+
+
+def extractTopfolder(File src, String trg) {
+    copy {
+        includeEmptyDirs = false
+            FileTree ft
+            if (src.name.endsWith('.tar.gz')) {
+                ft = tarTree(src)
+            }
+        from(ft) {
+            eachFile {
+                details -> details.path = details.path.substring(details.relativePath.segments[0].length())
+            }
         }
+        into trg
     }
 }

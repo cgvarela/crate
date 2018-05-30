@@ -28,16 +28,22 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 
-public class IntegerType extends DataType<Integer> implements Streamer<Integer>, DataTypeFactory {
+public class IntegerType extends DataType<Integer> implements Streamer<Integer>, FixedWidthType {
 
     public static final IntegerType INSTANCE = new IntegerType();
     public static final int ID = 9;
 
-    private IntegerType() {}
+    private IntegerType() {
+    }
 
     @Override
     public int id() {
         return ID;
+    }
+
+    @Override
+    public Precedence precedence() {
+        return Precedence.IntegerType;
     }
 
     @Override
@@ -55,25 +61,27 @@ public class IntegerType extends DataType<Integer> implements Streamer<Integer>,
         if (value == null) {
             return null;
         }
+        if (value instanceof Integer) {
+            return (Integer) value;
+        }
         if (value instanceof String) {
-            return Integer.parseInt((String)value);
+            return Integer.parseInt((String) value);
         }
         if (value instanceof BytesRef) {
-            return Integer.parseInt(((BytesRef)value).utf8ToString());
+            return Integer.parseInt(((BytesRef) value).utf8ToString());
         }
 
-        long longVal = ((Number)value).longValue();
+        long longVal = ((Number) value).longValue();
         if (longVal < Integer.MIN_VALUE || Integer.MAX_VALUE < longVal) {
             throw new IllegalArgumentException("integer value out of range: " + longVal);
         }
-        return ((Number)value).intValue();
+        return ((Number) value).intValue();
     }
 
     @Override
     public int compareValueTo(Integer val1, Integer val2) {
-        return Integer.compare(val1, val2);
+        return nullSafeCompareValueTo(val1, val2, Integer::compare);
     }
-
 
     @Override
     public Integer readValueFrom(StreamInput in) throws IOException {
@@ -89,7 +97,7 @@ public class IntegerType extends DataType<Integer> implements Streamer<Integer>,
     }
 
     @Override
-    public DataType<?> create() {
-        return INSTANCE;
+    public int fixedSize() {
+        return 16; // object overhead + 4 byte for int + 4 byte padding
     }
 }

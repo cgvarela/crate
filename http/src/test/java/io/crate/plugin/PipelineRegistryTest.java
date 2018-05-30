@@ -1,0 +1,61 @@
+/*
+ * Licensed to Crate under one or more contributor license agreements.
+ * See the NOTICE file distributed with this work for additional
+ * information regarding copyright ownership.  Crate licenses this file
+ * to you under the Apache License, Version 2.0 (the "License"); you may
+ * not use this file except in compliance with the License.  You may
+ * obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ * implied.  See the License for the specific language governing
+ * permissions and limitations under the License.
+ *
+ * However, if you have executed another commercial license agreement
+ * with Crate these terms will supersede the license and you may use the
+ * software solely pursuant to the terms of the relevant commercial
+ * agreement.
+ */
+
+package io.crate.plugin;
+
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
+import org.junit.Test;
+
+import static org.hamcrest.Matchers.is;
+import static org.junit.Assert.assertThat;
+
+public class PipelineRegistryTest {
+
+    private static PipelineRegistry.ChannelPipelineItem channelPipelineItem(String base, String name) {
+        return new PipelineRegistry.ChannelPipelineItem(base, name, () -> new SimpleChannelInboundHandler() {
+            @Override
+            protected void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+
+            }
+        });
+    }
+
+    @Test
+    public void testAddSortedToPipline() throws Exception {
+        PipelineRegistry pipelineRegistry = new PipelineRegistry();
+
+        pipelineRegistry.addBefore(channelPipelineItem("c", "d"));
+        pipelineRegistry.addBefore(channelPipelineItem("a", "b"));
+        pipelineRegistry.addBefore(channelPipelineItem("d", "e"));
+        pipelineRegistry.addBefore(channelPipelineItem("b", "c"));
+
+        int size = pipelineRegistry.addBeforeList().size();
+        assertThat(size, is(4));
+
+        String[] names = new String[pipelineRegistry.addBeforeList().size()];
+        for (int i = 0; i < size; i++) {
+            names[i] = pipelineRegistry.addBeforeList().get(i).name;
+        }
+        assertThat(names, is(new String[]{"b", "c", "d", "e"}));
+    }
+}

@@ -21,22 +21,33 @@
 
 package io.crate.plugin;
 
-
-import com.google.common.collect.Lists;
+import com.google.common.collect.ImmutableList;
 import io.crate.blob.BlobModule;
 import io.crate.blob.BlobService;
-import io.crate.blob.v2.BlobIndexModule;
+import io.crate.blob.DeleteBlobAction;
+import io.crate.blob.PutChunkAction;
+import io.crate.blob.StartBlobAction;
+import io.crate.blob.TransportDeleteBlobAction;
+import io.crate.blob.TransportPutChunkAction;
+import io.crate.blob.TransportStartBlobAction;
 import io.crate.blob.v2.BlobIndicesModule;
-import io.crate.blob.v2.BlobShardModule;
+import io.crate.blob.v2.BlobIndicesService;
+import org.elasticsearch.action.ActionRequest;
+import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.common.component.LifecycleComponent;
 import org.elasticsearch.common.inject.Module;
-import org.elasticsearch.common.settings.ImmutableSettings;
+import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.plugins.AbstractPlugin;
+import org.elasticsearch.node.Node;
+import org.elasticsearch.plugins.ActionPlugin;
+import org.elasticsearch.plugins.Plugin;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 
-public class BlobPlugin extends AbstractPlugin {
+public class BlobPlugin extends Plugin implements ActionPlugin {
 
     private final Settings settings;
 
@@ -49,49 +60,40 @@ public class BlobPlugin extends AbstractPlugin {
     }
 
     public String description() {
-        return "plugin that adds BlOB support to crate";
+        return "Plugin that adds BLOB support to CrateDB";
     }
 
     @Override
-    public Settings additionalSettings() {
-        ImmutableSettings.Builder settingsBuilder = ImmutableSettings.settingsBuilder();
-        settingsBuilder.put("http.type",
-                "io.crate.http.netty.NettyHttpServerTransportModule");
-        return settingsBuilder.build();
-    }
-
-    @Override
-    public Collection<Class<? extends Module>> modules() {
-        Collection<Class<? extends Module>> modules = Lists.newArrayList();
-        if (!settings.getAsBoolean("node.client", false)) {
-            modules.add(BlobModule.class);
-            modules.add(BlobIndicesModule.class);
+    public Collection<Module> createGuiceModules() {
+        Collection<Module> modules = new ArrayList<>(2);
+        modules.add(new BlobModule());
+        if (Node.NODE_DATA_SETTING.get(settings)) {
+            // the actual blob indices module is only available on data nodes. the blobservice on non data nodes will
+            // handle the requests redirection to data nodes.
+            modules.add(new BlobIndicesModule());
         }
         return modules;
     }
 
     @Override
-    public Collection<Class<? extends LifecycleComponent>> services() {
-        // only start the service if we have a data node
-        if (!settings.getAsBoolean("node.client", false)) {
-            Collection<Class<? extends LifecycleComponent>> services = Lists.newArrayList();
-            services.add(BlobService.class);
-            return services;
-        }
-        return super.services();
+    public List<Setting<?>> getSettings() {
+        return Arrays.asList(
+            BlobIndicesService.SETTING_BLOBS_PATH,
+            BlobIndicesService.SETTING_INDEX_BLOBS_ENABLED,
+            BlobIndicesService.SETTING_INDEX_BLOBS_PATH
+        );
     }
 
     @Override
-    public Collection<Class<? extends Module>> indexModules() {
-        Collection<Class<? extends Module>> modules = Lists.newArrayList();
-        modules.add(BlobIndexModule.class);
-        return modules;
+    public Collection<Class<? extends LifecycleComponent>> getGuiceServiceClasses() {
+        return ImmutableList.of(BlobService.class);
     }
 
     @Override
-    public Collection<Class<? extends Module>> shardModules() {
-        Collection<Class<? extends Module>> modules = Lists.newArrayList();
-        modules.add(BlobShardModule.class);
-        return modules;
+    public List<ActionHandler<? extends ActionRequest, ? extends ActionResponse>> getActions() {
+        return Arrays.asList(
+            new ActionHandler<>(PutChunkAction.INSTANCE, TransportPutChunkAction.class),
+            new ActionHandler<>(StartBlobAction.INSTANCE, TransportStartBlobAction.class),
+            new ActionHandler<>(DeleteBlobAction.INSTANCE, TransportDeleteBlobAction.class));
     }
 }

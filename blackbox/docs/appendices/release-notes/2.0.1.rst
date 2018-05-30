@@ -1,0 +1,48 @@
+.. _version_2.0.1:
+
+=============
+Version 2.0.1
+=============
+
+Released on 2017/06/12.
+
+.. WARNING::
+
+   CrateDB 2.x versions prior 2.0.4 (including this version) contain a critical
+   bug which leads to deletion of blob data upon node shutdown. It is
+   recommended to not install those versions.
+
+.. rubric:: Table of Contents
+
+.. contents::
+   :local:
+
+Changelog
+=========
+
+Breaking Changes
+----------------
+
+ - Changed default required shard copies for table creation and write
+   operations from ``quorum`` to ``all``.
+
+ - Changed the default value of ``number_of_replicas`` from ``1`` to ``0-1``.
+
+Changes
+-------
+
+ - Expose new setting ``write.wait_for_active_shards`` to allow users to
+   adjust the required shard copies for write operation to their needs.
+
+ - Expose fields for ``information_schema.columns`` and
+   ``information_schema.tables`` so that it conforms to SQL-99 standard.
+
+Fixes
+-----
+
+ - Added missing table setting ``translog.durability`` which is required and
+   must be set accordingly so that ``translog.sync_interval`` takes effect.
+
+ - Fixed a NPE when querying ``sys.shards`` table.
+
+ - Log failed authentication attempts at log level ``WARN``.

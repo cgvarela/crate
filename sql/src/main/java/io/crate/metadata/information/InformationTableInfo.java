@@ -22,55 +22,24 @@
 package io.crate.metadata.information;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
+import io.crate.action.sql.SessionContext;
 import io.crate.analyze.WhereClause;
 import io.crate.metadata.ColumnIdent;
-import io.crate.metadata.ReferenceInfo;
+import io.crate.metadata.RelationName;
 import io.crate.metadata.Routing;
-import io.crate.metadata.TableIdent;
-import io.crate.metadata.table.AbstractTableInfo;
-import io.crate.planner.RowGranularity;
+import io.crate.metadata.RoutingProvider;
+import io.crate.metadata.RowGranularity;
+import io.crate.metadata.table.ColumnRegistrar;
+import io.crate.metadata.table.StaticTableInfo;
+import org.elasticsearch.cluster.ClusterState;
 
-import javax.annotation.Nullable;
-import java.util.*;
 
-public class InformationTableInfo extends AbstractTableInfo {
+public class InformationTableInfo extends StaticTableInfo {
 
-    protected final TableIdent ident;
-    private final ImmutableList<ColumnIdent> primaryKeyIdentList;
-    protected final Routing routing;
-
-    private final ImmutableMap<ColumnIdent, ReferenceInfo> references;
-    private final ImmutableList<ReferenceInfo> columns;
-    private final String[] concreteIndices;
-
-    protected InformationTableInfo(InformationSchemaInfo schemaInfo,
-                                 TableIdent ident,
-                                 ImmutableList<ColumnIdent> primaryKeyIdentList,
-                                 ImmutableMap<ColumnIdent, ReferenceInfo> references,
-                                 ImmutableList<ReferenceInfo> columns) {
-        super(schemaInfo);
-        this.ident = ident;
-        this.primaryKeyIdentList = primaryKeyIdentList;
-        this.references = references;
-        this.columns = columns;
-        this.concreteIndices = new String[]{ident.name()};
-        Map<String, Map<String, Set<Integer>>> locations = new HashMap<>(1);
-        Map<String, Set<Integer>> tableLocation = new HashMap<>(1);
-        tableLocation.put(ident.fqn(), null);
-        locations.put(null, tableLocation);
-        this.routing = new Routing(locations);
-    }
-
-    @Nullable
-    @Override
-    public ReferenceInfo getReferenceInfo(ColumnIdent columnIdent) {
-        return references.get(columnIdent);
-    }
-
-    @Override
-    public Collection<ReferenceInfo> columns() {
-        return columns;
+    InformationTableInfo(RelationName ident,
+                         ColumnRegistrar columnRegistrar,
+                         ImmutableList<ColumnIdent> primaryKey) {
+        super(ident, columnRegistrar, primaryKey);
     }
 
     @Override
@@ -79,27 +48,11 @@ public class InformationTableInfo extends AbstractTableInfo {
     }
 
     @Override
-    public Routing getRouting(WhereClause whereClause) {
-        return routing;
-    }
-
-    @Override
-    public TableIdent ident() {
-        return ident;
-    }
-
-    @Override
-    public List<ColumnIdent> primaryKey() {
-        return primaryKeyIdentList;
-    }
-
-    @Override
-    public String[] concreteIndices() {
-        return concreteIndices;
-    }
-
-    @Override
-    public Iterator<ReferenceInfo> iterator() {
-        return references.values().iterator();
+    public Routing getRouting(ClusterState clusterState,
+                              RoutingProvider routingProvider,
+                              WhereClause whereClause,
+                              RoutingProvider.ShardSelection shardSelection,
+                              SessionContext sessionContext) {
+        return Routing.forTableOnSingleNode(ident(), clusterState.getNodes().getLocalNodeId());
     }
 }

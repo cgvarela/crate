@@ -28,7 +28,7 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 
 import java.io.IOException;
 
-public class LongType extends DataType<Long> implements Streamer<Long>, DataTypeFactory {
+public class LongType extends DataType<Long> implements FixedWidthType, Streamer<Long> {
 
     public static final LongType INSTANCE = new LongType();
     public static final int ID = 10;
@@ -36,6 +36,11 @@ public class LongType extends DataType<Long> implements Streamer<Long>, DataType
     @Override
     public int id() {
         return ID;
+    }
+
+    @Override
+    public Precedence precedence() {
+        return Precedence.LongType;
     }
 
     @Override
@@ -53,18 +58,82 @@ public class LongType extends DataType<Long> implements Streamer<Long>, DataType
         if (value == null) {
             return null;
         }
+        if (value instanceof Long) {
+            return (Long) value;
+        }
         if (value instanceof String) {
-            return Long.valueOf((String)value);
+            return Long.valueOf((String) value);
         }
         if (value instanceof BytesRef) {
-            return Long.valueOf(((BytesRef)value).utf8ToString());
+            return parseLong((BytesRef) value);
         }
-        return ((Number)value).longValue();
+        return ((Number) value).longValue();
+    }
+
+    /**
+     * parses the utf-8 encoded bytesRef argument as signed decimal {@code long}.
+     * All characters in the string must be decimal digits, except the first which may be an ASCII minus sign to indicate
+     * a negative value or or a plus sign to indicate a positive value.
+     * <p>
+     * mostly copied from {@link Long#parseLong(String s, int radix)}
+     */
+    private long parseLong(BytesRef value) {
+        assert value != null : "value must not be null";
+        boolean negative = false;
+        long result = 0;
+
+        int i = value.offset;
+        int len = value.length;
+        int radix = 10;
+        long limit = -Long.MAX_VALUE;
+        long multmin;
+        byte[] bytes = value.bytes;
+        int digit;
+
+        if (len <= 0) {
+            throw raiseNumberFormatException(value);
+        }
+
+        char firstChar = (char) bytes[i];
+        if (firstChar < '0') {
+            if (firstChar == '-') {
+                negative = true;
+                limit = Long.MIN_VALUE;
+            } else if (firstChar != '+') {
+                throw raiseNumberFormatException(value);
+            }
+
+            if (len == 1) { // lone '+' or '-'
+                throw raiseNumberFormatException(value);
+            }
+            i++;
+        }
+        multmin = limit / radix;
+        while (i < len + value.offset) {
+            digit = Character.digit((char) bytes[i], radix);
+            i++;
+            if (digit < 0) {
+                throw raiseNumberFormatException(value);
+            }
+            if (result < multmin) {
+                throw raiseNumberFormatException(value);
+            }
+            result *= radix;
+            if (result < limit + digit) {
+                throw raiseNumberFormatException(value);
+            }
+            result -= digit;
+        }
+        return negative ? result : -result;
+    }
+
+    private NumberFormatException raiseNumberFormatException(BytesRef value) {
+        throw new NumberFormatException('"' + value.utf8ToString() + "\" cannot be converted to type long");
     }
 
     @Override
     public int compareValueTo(Long val1, Long val2) {
-        return Long.compare(val1, val2);
+        return nullSafeCompareValueTo(val1, val2, Long::compare);
     }
 
     @Override
@@ -81,8 +150,13 @@ public class LongType extends DataType<Long> implements Streamer<Long>, DataType
     }
 
     @Override
-    public DataType<?> create() {
-        return INSTANCE;
+    public int fixedSize() {
+        return 16; // 8 object overhead, 8 long
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        return o instanceof LongType;
     }
 }
 

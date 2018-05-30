@@ -21,11 +21,27 @@
 
 package io.crate.metadata.table;
 
-public interface SchemaInfo<T extends TableInfo> extends Iterable<T> {
+import io.crate.metadata.view.ViewInfo;
+import org.elasticsearch.cluster.ClusterChangedEvent;
 
-    public TableInfo getTableInfo(String name);
+import javax.annotation.Nullable;
 
-    public String name();
+public interface SchemaInfo extends AutoCloseable {
 
-    public boolean systemSchema();
+    @Nullable
+    TableInfo getTableInfo(String name);
+
+    String name();
+
+    void invalidateTableCache(String tableName);
+
+    /**
+     * Called when cluster state and so the table definitions changes.
+     */
+    void update(ClusterChangedEvent event);
+
+    Iterable<TableInfo> getTables();
+
+    Iterable<ViewInfo> getViews();
+
 }

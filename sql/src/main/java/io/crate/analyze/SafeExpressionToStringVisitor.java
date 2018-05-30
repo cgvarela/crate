@@ -21,36 +21,47 @@
 
 package io.crate.analyze;
 
-import io.crate.sql.tree.*;
+import io.crate.data.Row;
+import io.crate.sql.tree.AstVisitor;
+import io.crate.sql.tree.Expression;
+import io.crate.sql.tree.Node;
+import io.crate.sql.tree.ParameterExpression;
+import io.crate.sql.tree.StringLiteral;
+import org.apache.lucene.util.BytesRef;
 
-import javax.annotation.Nullable;
 import java.util.Locale;
 
-public class SafeExpressionToStringVisitor extends AstVisitor<String, Object[]> {
+public final class SafeExpressionToStringVisitor extends AstVisitor<String, Row> {
 
-    private final static SafeExpressionToStringVisitor INSTANCE = new SafeExpressionToStringVisitor();
-    private SafeExpressionToStringVisitor() {}
+    private static final SafeExpressionToStringVisitor INSTANCE = new SafeExpressionToStringVisitor();
 
-    public static String convert(Node node, @Nullable Object[] context) {
-        return INSTANCE.process(node, context);
+    private SafeExpressionToStringVisitor() {
+    }
+
+    public static String convert(Expression expression, Row parameters) {
+        return INSTANCE.process(expression, parameters);
     }
 
     @Override
-    protected String visitStringLiteral(StringLiteral node, Object[] parameters) {
-        return node.getValue();
+    protected String visitStringLiteral(StringLiteral literal, Row parameters) {
+        return literal.getValue();
     }
 
     @Override
-    public String visitParameterExpression(ParameterExpression node, Object[] parameters) {
-        Object value = parameters[node.index()];
+    public String visitParameterExpression(ParameterExpression parameterExpr, Row parameters) {
+        Object value = parameters.get(parameterExpr.index());
+        if (value instanceof BytesRef) {
+            return ((BytesRef) value).utf8ToString();
+        }
         if (!(value instanceof String)) {
             throw new IllegalArgumentException(String.format(Locale.ENGLISH, "Parameter %s not a string value, can't handle this.", value));
         }
-        return (String)value;
+        return (String) value;
     }
 
     @Override
-    protected String visitNode(Node node, Object[] context) {
-        throw new IllegalArgumentException(String.format(Locale.ENGLISH, "Can't handle %s.", node));
+    protected String visitNode(Node node, Row context) {
+        throw new IllegalArgumentException(
+            String.format(Locale.ENGLISH, "Expected a String literal or a ParameterExpression. Can't handle %s.", node));
     }
 }

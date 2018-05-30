@@ -1,0 +1,132 @@
+=======
+Plugins
+=======
+
+CrateDB implements a plugin loading infrastructure making it possible to
+develop plugins for CrateDB.
+
+A plugin must at least:
+
+ - implement the ``io.crate.Plugin`` interface
+ - register its implementation at
+   ``META-INF/services/io.crate.Plugin`` so CrateDB plugin load can find
+   it.
+
+See our `CrateDB example plugin`_ for details about that.
+
+Plugin CrateDB Dependency
+=========================
+
+In order to develop a plugin against a CrateDB release, a dependency to the
+CrateDB's server libraries must be set up.
+
+Gradle
+------
+
+Define bintray (jCenter) repository:
+
+.. code-block:: groovy
+
+   repositories {
+       jcenter()
+   }
+
+Add CrateDB to compile dependencies:
+
+.. code-block:: groovy
+
+  dependencies {
+      compile 'io.crate:crate:<VERSION>'
+  }
+
+Maven
+-----
+
+Add bintray (jCenter) as a repository to your maven ``settings.xml``:
+
+.. code-block:: xml
+
+  <profiles>
+    <profile>
+      <repositories>
+        <repository>
+          <snapshots>
+            <enabled>false</enabled>
+          </snapshots>
+          <id>central</id>
+          <name>bintray</name>
+          <url>http://jcenter.bintray.com</url>
+        </repository>
+      </repositories>
+      <id>bintray</id>
+    </profile>
+  </profiles>
+
+  <activeProfiles>
+    <activeProfile>bintray</activeProfile>
+  </activeProfiles>
+
+Add CrateDB as a dependency:
+
+.. code-block:: xml
+
+  <dependencies>
+    <dependency>
+      <groupId>io.crate</groupId>
+      <artifactId>crate</artifactId>
+      <version>0.49.0</version>
+    </dependency>
+  </dependencies>
+
+Plugin Loading
+==============
+
+Loading of plugins is done by CrateDB for searching all class path element
+resources for a ``META-INF/services/io.crate.Plugin`` file.
+
+Inside this file just one line is allowed defining the full qualified class
+name which is implementing the `Plugin interface`_. This is almost the same
+like you may know from Java's ServiceLoader.
+
+Constructor with ``Settings`` argument
+--------------------------------------
+
+CrateDB passes a ``Settings`` instance to the plugin implementation constructor
+if such a constructor exists. Otherwise an empty constructor is used. By using
+the ``Settings`` instance, a plugin can process existing settings and/or
+implement it's own custom setting entries.
+
+The `CrateDB example plugin`_ makes use of that to implement a custom setting.
+
+.. highlight:: java
+
+Plugin Interface
+================
+
+CrateDB uses `Guice`_ module binding concept and so does a plugin. As described
+at the ``io.crate.Plugin`` interface, a plugin can load serveral module types
+by implementing relevant methods:
+
+ - lifecycle services
+ - node level modules
+
+This enables plugin developers to access a lot of functionality. But that comes
+at the price of the API stability: Most of the components in CrateDB are
+considered internal and may change with any version, including hotfix versions.
+
+The main purpose for the Plugins right now is to add additional scalar
+functions or aggregation functions. An example of a plugin that does that is
+`CrateDB example plugin`_.
+
+Installing a Plugin
+===================
+
+Installing a plugin is simply done by copying the plugin's JAR file(s)
+somewhere into the class path or to one of the following places:
+
+ - <CRATE_HOME>/plugins/
+ - <CRATE_HOME>/plugins/<SOME_PLUGIN_NAME>/
+ - <CRATE_HOME>/plugins/<SOME_PLUGIN_NAME>/lib/
+
+.. _`CrateDB example plugin`: https://github.com/crate/crate-example-plugin
+.. _Guice: https://github.com/google/guice

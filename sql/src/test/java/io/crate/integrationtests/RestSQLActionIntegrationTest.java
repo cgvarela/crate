@@ -22,25 +22,29 @@
 package io.crate.integrationtests;
 
 
-import io.crate.test.integration.CrateIntegrationTest;
+import org.apache.http.Header;
 import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.message.BasicHeader;
 import org.apache.http.util.EntityUtils;
 import org.junit.Test;
 
 import java.io.IOException;
 
+import static io.crate.testing.TestingHelpers.printedTable;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.StringStartsWith.startsWith;
 
-@CrateIntegrationTest.ClusterScope(scope = CrateIntegrationTest.Scope.GLOBAL)
 public class RestSQLActionIntegrationTest extends SQLHttpIntegrationTest {
 
     @Test
     public void testWithoutBody() throws IOException {
-        CloseableHttpResponse response = post();
+        CloseableHttpResponse response = post(null);
         assertEquals(400, response.getStatusLine().getStatusCode());
         String bodyAsString = EntityUtils.toString(response.getEntity());
-        assertEquals("{\"error\":{\"message\":\"SQLActionException[missing request body]\",\"code\":4000},\"error_trace\":null}",
-                     bodyAsString);
+        assertThat(bodyAsString, startsWith("{\"error\":{\"message\":\"SQLActionException[missing request body]\"," +
+                                            "\"code\":4000},\"error_trace\":\"SQLActionException:"
+        ));
     }
 
     @Test
@@ -48,14 +52,50 @@ public class RestSQLActionIntegrationTest extends SQLHttpIntegrationTest {
         CloseableHttpResponse response = post("{\"foo\": \"bar\"}");
         assertEquals(400, response.getStatusLine().getStatusCode());
         String bodyAsString = EntityUtils.toString(response.getEntity());
-        assertThat(bodyAsString, startsWith("{\"error\":{\"message\":\"SQLActionException[Failed to parse source [{\\\"foo\\\": \\\"bar\\\"}]]\",\"code\":4000},\"error_trace\":\"io.crate.exceptions.SQLParseException: Failed to parse source [{\\\"foo\\\": \\\"bar\\\"}]\\n\\tat "));
+        assertThat(bodyAsString, startsWith("{\"error\":{\"message\":\"SQLActionException[Failed to parse source" +
+                                            " [{\\\"foo\\\": \\\"bar\\\"}]]\",\"code\":4000},\"error_trace\":\"")
+        );
     }
 
     @Test
     public void testWithArgsAndBulkArgs() throws IOException {
-        CloseableHttpResponse response = post("{\"stmt\": \"INSERT INTO foo (bar) values (?)\", \"args\": [0], \"bulk_args\": [[0], [1]]}");
+        CloseableHttpResponse response
+            = post("{\"stmt\": \"INSERT INTO foo (bar) values (?)\", \"args\": [0], \"bulk_args\": [[0], [1]]}");
         assertEquals(400, response.getStatusLine().getStatusCode());
         String bodyAsString = EntityUtils.toString(response.getEntity());
-        assertEquals("{\"error\":{\"message\":\"SQLActionException[request body contains args and bulk_args. It's forbidden to provide both]\",\"code\":4000},\"error_trace\":null}", bodyAsString);
+        assertThat(bodyAsString, startsWith("{\"error\":{\"message\":\"SQLActionException[request body contains args" +
+                                            " and bulk_args. It's forbidden to provide both]\",\"code\":4000},\"error_trace\":\"SQLActionException:"
+        ));
+    }
+
+    @Test
+    public void testSetCustomSchema() throws IOException {
+        execute("create table custom.foo (id string)");
+        Header[] headers = new Header[]{
+            new BasicHeader("Default-Schema", "custom")
+        };
+        CloseableHttpResponse response = post("{\"stmt\": \"select * from foo\"}", headers);
+        assertThat(response.getStatusLine().getStatusCode(), is(200));
+
+        response = post("{\"stmt\": \"select * from foo\"}");
+        assertThat(response.getStatusLine().getStatusCode(), is(404));
+        assertThat(EntityUtils.toString(response.getEntity()), containsString("RelationUnknown"));
+    }
+
+    @Test
+    public void testInsertWithMixedCompatibleTypes() throws IOException {
+        execute("create table doc.t1 (x array(float))");
+        CloseableHttpResponse resp = post("{\"stmt\": \"insert into doc.t1 (x) values (?)\", \"args\": [[0, 1.0, 1.42]]}");
+        assertThat(resp.getStatusLine().getStatusCode(), is(200));
+        execute("refresh table doc.t1");
+        assertThat(printedTable(execute("select x from doc.t1").rows()),
+            is("[0.0, 1.0, 1.42]\n"));
+    }
+
+    @Test
+    public void testExecutionErrorContainsStackTrace() throws Exception {
+        CloseableHttpResponse resp = post("{\"stmt\": \"select 1 / 0\"}");
+        String bodyAsString = EntityUtils.toString(resp.getEntity());
+        assertThat(bodyAsString, containsString("ArithmeticFunctions.java"));
     }
 }

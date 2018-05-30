@@ -21,7 +21,7 @@
 
 package io.crate.exceptions;
 
-public class ValidationException extends RuntimeException implements CrateException {
+public abstract class ValidationException extends RuntimeException implements CrateException {
 
     public ValidationException() {
     }
@@ -34,18 +34,9 @@ public class ValidationException extends RuntimeException implements CrateExcept
         super(message, cause);
     }
 
-    public ValidationException(Throwable cause) {
-        super(cause);
-    }
-
     @Override
     public int errorCode() {
         return 0;
-    }
-
-    @Override
-    public Object[] args() {
-        return new Object[0];
     }
 
 }

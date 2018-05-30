@@ -28,30 +28,30 @@ import org.elasticsearch.index.shard.ShardId;
 
 public class BlobRecoveryStatus {
 
-    private final RecoveryStatus indexRecoveryStatus;
+    private final RecoveryTarget recoveryTarget;
     private final ConcurrentMapLong<BlobRecoveryTransferStatus> onGoingTransfers = ConcurrentCollections.newConcurrentMapLong();
     final BlobShard blobShard;
 
 
-    public BlobRecoveryStatus(RecoveryStatus indexRecoveryStatus, BlobShard blobShard) {
-        this.indexRecoveryStatus = indexRecoveryStatus;
+    public BlobRecoveryStatus(RecoveryTarget recoveryTarget, BlobShard blobShard) {
+        this.recoveryTarget = recoveryTarget;
         this.blobShard = blobShard;
     }
 
-    public long recoveryId(){
-        return indexRecoveryStatus.recoveryId;
+    public long recoveryId() {
+        return recoveryTarget.recoveryId();
     }
 
     public boolean canceled() {
-        return indexRecoveryStatus.isCanceled();
+        return recoveryTarget.cancellableThreads().isCancelled();
     }
 
     public void sentCanceledToSource() {
-        indexRecoveryStatus.sentCanceledToSource = true;
+        recoveryTarget.cancellableThreads().checkForCancel();
     }
 
     public ShardId shardId() {
-        return indexRecoveryStatus.shardId;
+        return recoveryTarget.shardId();
     }
 
     public ConcurrentMapLong<BlobRecoveryTransferStatus> onGoingTransfers() {

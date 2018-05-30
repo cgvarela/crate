@@ -21,15 +21,17 @@
 
 package io.crate.types;
 
-import com.carrotsearch.randomizedtesting.RandomizedTest;
-import jsr166e.LongAdder;
+import io.crate.test.integration.CrateUnitTest;
 import org.junit.Test;
 
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.LongAdder;
 
-public class TypeConversionTest extends RandomizedTest{
+import static org.hamcrest.core.Is.is;
+
+public class TypeConversionTest extends CrateUnitTest {
 
     private static class Repeater<T> implements Iterable<T>, Iterator<T> {
 
@@ -91,36 +93,44 @@ public class TypeConversionTest extends RandomizedTest{
 
         for (Byte byteVal : bytes(10)) {
             for (DataType t : DataTypes.ALLOWED_CONVERSIONS.get(DataTypes.BYTE.id())) {
+                if (t.equals(DataTypes.IP)) {
+                    byteVal = (byte) Math.abs(byteVal == Byte.MIN_VALUE ? byteVal >> 1 : byteVal);
+                }
                 t.value(byteVal);
             }
         }
 
         for (Integer shortVal : integers((int) Byte.MIN_VALUE, (int) Byte.MAX_VALUE, 10)) {
             for (DataType t : DataTypes.ALLOWED_CONVERSIONS.get(DataTypes.SHORT.id())) {
+                shortVal = t.equals(DataTypes.IP) ? Math.abs(shortVal) : shortVal;
                 t.value(shortVal.shortValue());
             }
         }
 
         for (Integer intValue : integers((int) Byte.MIN_VALUE, (int) Byte.MAX_VALUE, 10)) {
             for (DataType t : DataTypes.ALLOWED_CONVERSIONS.get(DataTypes.INTEGER.id())) {
+                intValue = t.equals(DataTypes.IP) ? Math.abs(intValue) : intValue;
                 t.value(intValue);
             }
         }
 
         for (Integer longValue : integers((int) Byte.MIN_VALUE, (int) Byte.MAX_VALUE, 10)) {
             for (DataType t : DataTypes.ALLOWED_CONVERSIONS.get(DataTypes.LONG.id())) {
+                longValue = t.equals(DataTypes.IP) ? Math.abs(longValue) : longValue;
                 t.value(longValue.longValue());
             }
         }
 
         for (Integer floatValue : integers((int) Byte.MIN_VALUE, (int) Byte.MAX_VALUE, 10)) {
             for (DataType t : DataTypes.ALLOWED_CONVERSIONS.get(DataTypes.FLOAT.id())) {
+                floatValue = t.equals(DataTypes.IP) ? Math.abs(floatValue) : floatValue;
                 t.value(floatValue.floatValue());
             }
         }
 
         for (Integer doubleValue : integers((int) Byte.MIN_VALUE, (int) Byte.MAX_VALUE, 10)) {
             for (DataType t : DataTypes.ALLOWED_CONVERSIONS.get(DataTypes.DOUBLE.id())) {
+                doubleValue = t.equals(DataTypes.IP) ? Math.abs(doubleValue) : doubleValue;
                 t.value(doubleValue.doubleValue());
             }
         }
@@ -140,6 +150,7 @@ public class TypeConversionTest extends RandomizedTest{
     public void testShortOutOfRangePositive() throws Exception {
         DataTypes.SHORT.value(Integer.MAX_VALUE);
     }
+
     @Test(expected = IllegalArgumentException.class)
     public void testShortOutOfRangeNegative() throws Exception {
         DataTypes.SHORT.value(Integer.MIN_VALUE);
@@ -165,11 +176,16 @@ public class TypeConversionTest extends RandomizedTest{
         DataTypes.FLOAT.value(-Double.MAX_VALUE);
     }
 
+    @Test(expected = IllegalArgumentException.class)
+    public void testIpNegativeValue() throws Exception {
+        DataTypes.IP.value(Long.MIN_VALUE);
+    }
+
     @Test
     public void selfConversionTest() throws Exception {
         for (DataType type : com.google.common.collect.Iterables.concat(
-                DataTypes.PRIMITIVE_TYPES,
-                Arrays.asList(DataTypes.UNDEFINED, DataTypes.GEO_POINT, DataTypes.OBJECT))) {
+            DataTypes.PRIMITIVE_TYPES,
+            Arrays.asList(DataTypes.UNDEFINED, DataTypes.GEO_POINT, DataTypes.GEO_SHAPE, DataTypes.OBJECT))) {
 
             assertTrue(type.isConvertableTo(type));
 
@@ -184,8 +200,8 @@ public class TypeConversionTest extends RandomizedTest{
     @Test
     public void testNotSupportedConversion() throws Exception {
         for (DataType type : com.google.common.collect.Iterables.concat(
-                DataTypes.PRIMITIVE_TYPES,
-                Arrays.asList(DataTypes.GEO_POINT, DataTypes.OBJECT))) {
+            DataTypes.PRIMITIVE_TYPES,
+            Arrays.asList(DataTypes.GEO_POINT, DataTypes.GEO_SHAPE, DataTypes.OBJECT))) {
             assertFalse(DataTypes.NOT_SUPPORTED.isConvertableTo(type));
         }
     }
@@ -193,13 +209,27 @@ public class TypeConversionTest extends RandomizedTest{
     @Test
     public void testToNullConversions() throws Exception {
         for (DataType type : com.google.common.collect.Iterables.concat(
-                DataTypes.PRIMITIVE_TYPES,
-                Arrays.asList(DataTypes.UNDEFINED, DataTypes.GEO_POINT, DataTypes.OBJECT))) {
-
-            assertTrue(type.isConvertableTo(DataTypes.UNDEFINED));
-            assertTrue(DataTypes.UNDEFINED.isConvertableTo(type));
+            DataTypes.PRIMITIVE_TYPES,
+            Arrays.asList(DataTypes.GEO_POINT, DataTypes.GEO_SHAPE, DataTypes.OBJECT))) {
+            assertThat(type.isConvertableTo(DataTypes.UNDEFINED), is(false));
         }
+        assertThat(DataTypes.UNDEFINED.isConvertableTo(DataTypes.UNDEFINED), is(true));
     }
 
+    @Test
+    public void testGeoPointConversion() throws Exception {
+        assertThat(DataTypes.GEO_POINT.isConvertableTo(new ArrayType(DataTypes.DOUBLE)), is(true));
+        assertThat(DataTypes.STRING.isConvertableTo(DataTypes.GEO_POINT), is(true));
+    }
 
+    @Test
+    public void testGeoShapeConversion() throws Exception {
+        assertThat(DataTypes.STRING.isConvertableTo(DataTypes.GEO_SHAPE), is(true));
+        assertThat(DataTypes.OBJECT.isConvertableTo(DataTypes.GEO_SHAPE), is(true));
+    }
+
+    @Test
+    public void testTimestampToDoubleConversion() {
+        assertThat(TimestampType.INSTANCE.isConvertableTo(DoubleType.INSTANCE), is(true));
+    }
 }

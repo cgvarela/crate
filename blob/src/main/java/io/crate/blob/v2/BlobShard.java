@@ -22,32 +22,67 @@
 package io.crate.blob.v2;
 
 import io.crate.blob.BlobContainer;
-import io.crate.blob.BlobEnvironment;
-import io.crate.blob.stats.BlobStats;
+import org.apache.logging.log4j.Logger;
+import org.apache.lucene.util.IOUtils;
 import org.elasticsearch.cluster.routing.ShardRouting;
-import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.index.settings.IndexSettings;
-import org.elasticsearch.index.shard.AbstractIndexShardComponent;
-import org.elasticsearch.index.shard.ShardId;
-import org.elasticsearch.index.shard.service.IndexShard;
+import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.inject.internal.Nullable;
+import org.elasticsearch.common.io.PathUtils;
+import org.elasticsearch.common.logging.Loggers;
+import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.shard.IndexShard;
+import org.elasticsearch.index.shard.ShardPath;
 
-import java.io.File;
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 
-public class BlobShard extends AbstractIndexShardComponent {
+public class BlobShard {
+
+    private static final String BLOBS_SUB_PATH = "blobs";
 
     private final BlobContainer blobContainer;
     private final IndexShard indexShard;
+    private final Logger logger;
+    private final Path blobDir;
 
-    @Inject
-    protected BlobShard(ShardId shardId, @IndexSettings Settings indexSettings,
-                        BlobEnvironment blobEnvironment,
-                        IndexShard indexShard) {
-        super(shardId, indexSettings);
+    private long totalSize = 0;
+    private long blobsCount = 0;
+
+    public BlobShard(IndexShard indexShard, @Nullable Path globalBlobPath) {
         this.indexShard = indexShard;
-        File blobDir = blobDir(blobEnvironment);
+        logger = Loggers.getLogger(BlobShard.class, indexShard.indexSettings().getSettings(), indexShard.shardId());
+        blobDir = resolveBlobDir(indexShard.indexSettings(), indexShard.shardPath(), globalBlobPath);
         logger.info("creating BlobContainer at {}", blobDir);
         this.blobContainer = new BlobContainer(blobDir);
+    }
+
+    void initialize() {
+        try {
+            blobContainer.visitBlobs(new SimpleFileVisitor<Path>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    blobsCount += 1;
+                    long fileSize = attrs.size();
+                    totalSize += fileSize;
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            logger.error("Unable to compute initial blob shard size and count", e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    Path getBlobDir() {
+        return blobDir;
+    }
+
+    public IndexShard indexShard() {
+        return indexShard;
     }
 
     public byte[][] currentDigests(byte prefix) {
@@ -55,7 +90,38 @@ public class BlobShard extends AbstractIndexShardComponent {
     }
 
     public boolean delete(String digest) {
-        return blobContainer.getFile(digest).delete();
+        try {
+            Path blobPath = blobContainer.getFile(digest).toPath();
+            long blobSize = 0;
+            if (Files.exists(blobPath)) {
+                blobSize = Files.size(blobPath);
+            }
+            boolean deleted = Files.deleteIfExists(blobPath);
+            if (deleted) {
+                decrementStats(blobSize);
+            }
+            return deleted;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void incrementStats(long size) {
+        totalSize += size;
+        blobsCount++;
+    }
+
+    private void decrementStats(long size) {
+        totalSize -= size;
+        blobsCount--;
+    }
+
+    public long getTotalSize() {
+        return totalSize;
+    }
+
+    public long getBlobsCount() {
+        return blobsCount;
     }
 
     public BlobContainer blobContainer() {
@@ -66,30 +132,33 @@ public class BlobShard extends AbstractIndexShardComponent {
         return indexShard.routingEntry();
     }
 
-    public BlobStats blobStats() {
-        final BlobStats stats = new BlobStats();
-
-        stats.location(blobContainer().getBaseDirectory().getAbsolutePath());
-        stats.availableSpace(blobContainer().getBaseDirectory().getFreeSpace());
-        blobContainer().walkFiles(null, new BlobContainer.FileVisitor() {
-            @Override
-            public boolean visit(File file) {
-                stats.totalUsage(stats.totalUsage() + file.length());
-                stats.count(stats.count() + 1);
-                return true;
-            }
-        });
-
-        return stats;
+    void deleteShard() {
+        Path baseDirectory = blobContainer.getBaseDirectory();
+        try {
+            IOUtils.rm(baseDirectory);
+        } catch (IOException e) {
+            logger.warn("Could not delete blob directory: {} {}", baseDirectory, e);
+        }
     }
 
-    private File blobDir(BlobEnvironment blobEnvironment) {
-        if (indexSettings.get(BlobIndices.SETTING_INDEX_BLOBS_PATH) != null) {
-            File blobPath = new File(indexSettings.get(BlobIndices.SETTING_INDEX_BLOBS_PATH));
-            blobEnvironment.validateBlobsPath(blobPath);
-            return blobEnvironment.shardLocation(shardId, blobPath);
+    private Path resolveBlobDir(IndexSettings indexSettings, ShardPath shardPath, @Nullable Path globalBlobPath) {
+        String tableBlobPath = BlobIndicesService.SETTING_INDEX_BLOBS_PATH.get(indexSettings.getSettings());
+
+        Path blobPath;
+        if (Strings.isNullOrEmpty(tableBlobPath)) {
+            if (globalBlobPath == null) {
+                return shardPath.getDataPath().resolve(BLOBS_SUB_PATH);
+            }
+            assert BlobIndicesService.ensureExistsAndWritable(globalBlobPath) : "global blob path must exist and be writable";
+            blobPath = globalBlobPath;
         } else {
-            return blobEnvironment.shardLocation(shardId);
+            blobPath = PathUtils.get(tableBlobPath);
         }
+        // rootDataPath is /<path.data>/<clusterName>/nodes/<nodeLock>/
+        Path rootDataPath = shardPath.getRootDataPath();
+        Path clusterDataDir = rootDataPath.getParent().getParent();
+        Path pathToShard = clusterDataDir.relativize(shardPath.getShardStatePath());
+        // this generates <blobs.path>/nodes/<nodeLock>/<path-to-shard>/blobs
+        return blobPath.resolve(pathToShard).resolve(BLOBS_SUB_PATH);
     }
 }

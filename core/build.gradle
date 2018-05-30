@@ -1,70 +1,52 @@
+apply from: "$rootDir/gradle/javaModule.gradle"
 
-apply plugin: 'java'
 
 archivesBaseName = 'crate-core'
 
-configurations {
-    all*.exclude group: 'org.elasticsearch'
-    sharedCompile.extendsFrom compile
-}
-
 dependencies {
-    compile project(':es')
-    compile 'commons-codec:commons-codec:1.9'
-    testCompile project(':testing')
+    compile project(':es:es-core')
+    compile "com.google.guava:guava:${versions.guava}"
+    testCompile project(':integration-testing')
 }
 
 test {
-    // show standard out and standard error of the test JVM(s) on the console
-    testLogging.showStandardStreams = true
+    outputs.upToDateWhen { false }
 
+    testLogging.exceptionFormat = 'full'
     jacoco {
         excludes = [
                 "*Test*"
-                ]
-    }
-
-}
-
-sourceSets {
-    test {
-        resources {
-            srcDir 'src/test/java'
-        }
-    }
-    shared {
-        java {
-            srcDir "src/main/java/"
-            include "io/crate/Streamer*"
-            include "io/crate/TimestampFormat*"
-            include "io/crate/core/collections/MapComparator*"
-            include "io/crate/core/StringUtils*"
-            include "io/crate/types/**"
-        }
+        ]
     }
 }
 
-task writeBuildInfo << {
-    def stdout = new ByteArrayOutputStream()
-    exec {
-        commandLine 'git', 'log', '-n', '1', '--pretty=format:%H'
-        standardOutput stdout
-    }
-    def hash = stdout.toString().trim()
-
-    def file = new File(project.projectDir.path + "/src/main/resources/crate-build.properties");
-    if(!file.isFile()) {
-        def parentDir = new File(file.parent);
-        if (!parentDir.isDirectory()) {
-            parentDir.mkdirs();
+task getVersion(dependsOn: 'classes') {
+    doLast {
+        def stdout = new ByteArrayOutputStream()
+        javaexec {
+            classpath = sourceSets.main.runtimeClasspath
+            main = 'io.crate.Version'
+            standardOutput = stdout
         }
-        file.createNewFile();
-    }
+        ext.gitTag = "git describe".execute().text.trim()
+        ext.version = stdout.toString().trim().split(" ")[1].replace(',', '').trim()
 
-    ant.propertyfile(file:file.path, comment:'Build Properties') {
-        ant.entry(key:'hash',value:hash)
-        ant.entry(key:'timestamp', value:System.currentTimeMillis())
+        ext.buildDate = new Date().format('yyyyMMddHHmm')
+        ext.buildShortHash = "git rev-parse --short HEAD".execute().text.trim()
+        if (gradle.taskGraph.hasTask(':app:release')) {
+            assert gitTag == version, "Version mismatch gitTag: " + gitTag + " does not match crate version: " + version
+        } else {
+
+            if (gradle.taskGraph.hasTask(':app:nightly')) {
+                ext.version = version.replace('-SNAPSHOT', '') + "-" + ext.buildDate + "-" + ext.buildShortHash
+            } else if (!gradle.taskGraph.hasTask(':app:uploadArchives')) {
+                ext.version = version + "-" + ext.buildShortHash
+            }
+        }
+
+        logger.quiet("gitTag:         " + gitTag)
+        logger.quiet("version:        " + version)
+        logger.quiet("buildDate:      " + buildDate)
+        logger.quiet("buildShortHash: " + buildShortHash)
     }
 }
-
-compileJava.dependsOn writeBuildInfo

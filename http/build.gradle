@@ -1,0 +1,14 @@
+apply from: "$rootDir/gradle/javaModule.gradle"
+
+archivesBaseName = 'crate-http-transport'
+
+dependencies {
+    compile project(':es:es-transport')
+    compile project(':core')
+    testCompile project(':integration-testing')
+}
+
+test {
+    testLogging.exceptionFormat = 'full'
+    jacoco.excludes = ["*Test*"]
+}

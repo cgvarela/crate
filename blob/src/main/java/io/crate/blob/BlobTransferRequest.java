@@ -21,8 +21,7 @@
 
 package io.crate.blob;
 
-import org.elasticsearch.action.support.replication.ShardReplicationOperationRequest;
-import org.elasticsearch.common.bytes.BytesArray;
+import org.elasticsearch.action.support.replication.ReplicationRequest;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -33,10 +32,9 @@ import java.util.UUID;
 /**
  * Base Request Class for Blob Transfers
  */
-public abstract class BlobTransferRequest<T extends ShardReplicationOperationRequest>
-    extends ShardReplicationOperationRequest<T>
-    implements IPutChunkRequest
-{
+public abstract class BlobTransferRequest<T extends ReplicationRequest<T>>
+    extends ReplicationRequest<T>
+    implements IPutChunkRequest {
 
     private boolean last;
     private UUID transferId;
@@ -49,11 +47,11 @@ public abstract class BlobTransferRequest<T extends ShardReplicationOperationReq
         return content;
     }
 
-    public boolean isLast(){
+    public boolean isLast() {
         return last;
     }
 
-    public BlobTransferRequest(String index, UUID transferId, BytesArray content, boolean last) {
+    public BlobTransferRequest(String index, UUID transferId, BytesReference content, boolean last) {
         this.index = index;
         this.transferId = transferId;
         this.content = content;
@@ -79,5 +77,13 @@ public abstract class BlobTransferRequest<T extends ShardReplicationOperationReq
 
     public UUID transferId() {
         return transferId;
+    }
+
+    @Override
+    public String toString() {
+        return "BlobTransferRequest{" +
+               "last=" + last +
+               ", transferId=" + transferId +
+               '}';
     }
 }
